@@ -418,6 +418,61 @@ public class GameTools {
 				},"required":["from","to"]}""".formatted(POS_SCHEMA, POS_SCHEMA, DIM_SCHEMA),
 			this::viewBuild);
 
+		register("define_item",
+			"Create a custom item, or update one by reusing its id. It appears for every player right away, drawn from "
+				+ "your voxel model with real lighting. Draw flat items as pixel art in pixels (rows top to bottom, characters "
+				+ "left to right, like a 16x16 vanilla item sprite, extruded thickness voxels deep), or give a 3D model in layers "
+				+ "(place_blueprint format: layers bottom to top, rows along +z, characters along +x). palette maps characters "
+				+ "to #RRGGBB or #AARRGGBB colors (alpha below FF is see-through); '.' and ' ' are empty. Up to 32 voxels per "
+				+ "side; 16 is one item's normal size and bigger models are scaled to fit. style picks how it's held: item "
+				+ "(flat items like food, gems, potions), handheld (tools and weapons, held like a sword; draw them diagonally, "
+				+ "bottom-left to top-right like vanilla), block (chunky 3D objects held like a block). properties set behavior. "
+				+ "Updating a definition changes the look, name and commands of existing copies at once; stack size, food, "
+				+ "damage, durability, glint, rarity and cooldown apply to copies given afterwards.",
+			"""
+				{"type":"object","properties":{
+				  "id":{"type":"string","description":"Lowercase letters, digits and underscores, e.g. ruby_sword."},
+				  "name":{"type":"string"},
+				  "description":{"type":"string","description":"Tooltip text; newlines make extra lines."},
+				  "style":{"type":"string","enum":["item","handheld","block"]},
+				  "palette":{"type":"object","additionalProperties":{"type":"string"}},
+				  "pixels":{"type":"array","items":{"type":"string"}},
+				  "thickness":{"type":"integer","description":"pixels only: depth in voxels (default 1)."},
+				  "layers":{"type":"array","items":{"type":"array","items":{"type":"string"}}},
+				  "properties":{"type":"object","properties":{
+				    "max_stack":{"type":"integer","description":"1 to 99, default 64."},
+				    "durability":{"type":"integer","description":"Uses before it breaks; makes it unstackable."},
+				    "attack_damage":{"type":"number","description":"Total melee damage, e.g. 7 like a diamond sword."},
+				    "attack_speed":{"type":"number","description":"Attacks per second, e.g. 1.6 like a sword."},
+				    "food":{"type":"object","properties":{"nutrition":{"type":"integer"},"saturation":{"type":"number"},"always_edible":{"type":"boolean"}}},
+				    "use_commands":{"type":"array","items":{"type":"string"},"description":"Run as the player on right-click (or when eaten, for food). @s is the player, ~ ~ ~ their position."},
+				    "cooldown_seconds":{"type":"number"},
+				    "glint":{"type":"boolean"},
+				    "rarity":{"type":"string","enum":["common","uncommon","rare","epic"]}
+				  }}
+				},"required":["id","name","palette"]}""",
+			this::defineItem);
+
+		register("give_item",
+			"Give a player copies of a custom item made with define_item.",
+			"""
+				{"type":"object","properties":{
+				  "id":{"type":"string"},
+				  "count":{"type":"integer","description":"Default 1."},
+				  "player":{"type":"string","description":"Defaults to the player who sent the current message."}
+				},"required":["id"]}""",
+			this::giveItem);
+
+		register("view_item",
+			"See a picture of a custom item's voxel model, drawn like view_build (flat-shaded cubes, see-through colors shown "
+				+ "solid). Use it to check a new design before giving it out.",
+			"""
+				{"type":"object","properties":{
+				  "id":{"type":"string"},
+				  "views":{"type":"array","items":{"type":"string","enum":["southeast","southwest","northwest","northeast","top"]}}
+				},"required":["id"]}""",
+			this::viewItem);
+
 		register("scan_area",
 			"Read the blocks in a box (inclusive corners) in the same layer/row/palette format place_blueprint uses, "
 				+ "with origin at the minimum corner. '.' = air. Use it to inspect terrain, existing builds, or verify your work. "
@@ -726,6 +781,8 @@ public class GameTools {
 
 	private static String describe(ItemStack s) {
 		if (s.isEmpty()) return "nothing";
+		String custom = s.get(CustomItems.DEFINITION);
+		if (custom != null) return "custom item " + custom + " x" + s.getCount();
 		return BuiltInRegistries.ITEM.getKey(s.getItem()) + " x" + s.getCount();
 	}
 
@@ -733,16 +790,22 @@ public class GameTools {
 
 	private String runCommands(JsonObject args) throws ToolError {
 		if (!args.has("commands") || !args.get("commands").isJsonArray()) throw new ToolError("commands must be an array of strings");
-		JsonArray cmds = args.getAsJsonArray("commands");
-		if (cmds.size() > 2000) throw new ToolError("At most 2000 commands per call.");
-		ServerPlayer p = player(args, "player");
+		JsonArray arr = args.getAsJsonArray("commands");
+		if (arr.size() > 2000) throw new ToolError("At most 2000 commands per call.");
+		List<String> cmds = new ArrayList<>();
+		for (JsonElement e : arr) cmds.add(e.getAsString());
+		return execute(player(args, "player"), cmds);
+	}
+
+	/** Run commands in order as the player (or the server, if null) at the configured permission level. Server thread. */
+	String execute(ServerPlayer p, List<String> cmds) {
 		CommandSourceStack base = (p != null ? p.createCommandSourceStack() : server.createCommandSourceStack())
 			.withPermission(LevelBasedPermissionSet.forLevel(PermissionLevel.byId(Math.max(0, Math.min(4, cfg.commandPermissionLevel)))));
 
 		StringBuilder sb = new StringBuilder();
 		int failures = 0;
 		for (int i = 0; i < cmds.size(); i++) {
-			String cmd = cmds.get(i).getAsString().trim();
+			String cmd = cmds.get(i).trim();
 			List<String> out = new ArrayList<>();
 			boolean[] result = {false, false}; // [called, success]
 			int[] value = {0};
@@ -1183,6 +1246,101 @@ public class GameTools {
 		return new String(Character.toChars(0x00C0 + index - PALETTE_CHARS.length()));
 	}
 
+	// ---------------------------------------------------------------- custom items
+
+	private String defineItem(JsonObject args) throws ToolError {
+		String id = args.has("id") ? args.get("id").getAsString() : "";
+		if (!id.matches("[a-z0-9_]{1,40}")) throw new ToolError("id must be 1 to 40 lowercase letters, digits or underscores");
+		String style = args.has("style") ? args.get("style").getAsString() : "item";
+		if (!List.of("item", "handheld", "block").contains(style)) throw new ToolError("style must be item, handheld or block");
+		JsonObject model;
+		if (args.has("pixels")) {
+			model = VoxelModel.fromPixels(args.getAsJsonObject("palette"), args.getAsJsonArray("pixels"), optInt(args, "thickness", 1));
+		} else if (args.has("layers")) {
+			model = new JsonObject();
+			model.add("palette", args.get("palette"));
+			model.add("layers", args.get("layers"));
+		} else {
+			throw new ToolError("Give the model as pixels or layers");
+		}
+		VoxelModel parsed;
+		try {
+			parsed = VoxelModel.parse(model);
+		} catch (IllegalArgumentException | IllegalStateException | ClassCastException e) {
+			throw new ToolError("Bad model: " + e.getMessage());
+		}
+		JsonObject props = args.has("properties") ? args.getAsJsonObject("properties") : new JsonObject();
+		if (props.has("rarity") && !List.of("common", "uncommon", "rare", "epic").contains(props.get("rarity").getAsString())) {
+			throw new ToolError("rarity must be common, uncommon, rare or epic");
+		}
+
+		JsonObject def = new JsonObject();
+		def.addProperty("id", id);
+		def.addProperty("name", args.get("name").getAsString());
+		if (args.has("description")) def.addProperty("description", args.get("description").getAsString());
+		def.addProperty("style", style);
+		def.add("model", model);
+		def.add("properties", props);
+		boolean existed = CustomItems.DEFS.containsKey(id);
+		CustomItems.define(server, def);
+		return (existed ? "Updated" : "Defined") + " custom item " + id + " (" + parsed.sx + "x" + parsed.sy + "x" + parsed.sz
+			+ " voxels). Hand it out with give_item, or check it with view_item.";
+	}
+
+	private JsonObject itemDef(JsonObject args) throws ToolError {
+		String id = args.has("id") ? args.get("id").getAsString() : "";
+		JsonObject def = CustomItems.DEFS.get(id);
+		if (def == null) {
+			throw new ToolError("No custom item " + id + ". Defined: " + (CustomItems.DEFS.isEmpty() ? "none" : String.join(", ", new java.util.TreeSet<>(CustomItems.DEFS.keySet()))));
+		}
+		return def;
+	}
+
+	private String giveItem(JsonObject args) throws ToolError {
+		JsonObject def = itemDef(args);
+		ServerPlayer p = player(args, "player");
+		if (p == null) throw new ToolError("No player to give it to");
+		ItemStack stack = CustomItems.stack(def, optInt(args, "count", 1));
+		int n = stack.getCount();
+		if (!p.getInventory().add(stack)) p.drop(stack, false, net.minecraft.util.Prediction.SERVER_ONLY); // full inventory: drop it at their feet
+		return "Gave " + n + " " + def.get("name").getAsString() + " to " + p.getScoreboardName() + ".";
+	}
+
+	private CompletableFuture<Images> viewItem(JsonObject args) throws ToolError {
+		JsonObject def = itemDef(args);
+		List<String> views = new ArrayList<>();
+		if (args.has("views") && args.get("views").isJsonArray()) for (JsonElement e : args.getAsJsonArray("views")) views.add(e.getAsString());
+		if (views.isEmpty()) views.add("southeast");
+		if (views.size() > 4) throw new ToolError("At most 4 views per call.");
+		for (String v : views) if (!v.equals("top")) view(v);
+		VoxelModel m = VoxelModel.parse(def.getAsJsonObject("model"));
+		int[] rgb = new int[m.argb.length];
+		for (int i = 0; i < rgb.length; i++) {
+			if (m.argb[i] == 0 || (m.argb[i] >>> 24) == 0) continue;
+			rgb[i] = Math.max(1, m.argb[i] & 0xFFFFFF); // 0 means empty to the renderer, so keep black visible
+		}
+		Renderer.Snapshot snap = new Renderer.Snapshot(rgb, m.sx, m.sy, m.sz);
+		return CompletableFuture.supplyAsync(() -> render(snap, views, def.get("name").getAsString() + " (" + m.sx + "x" + m.sy + "x" + m.sz + " voxels)."));
+	}
+
+	private static Images render(Renderer.Snapshot snap, List<String> views, String header) {
+		List<byte[]> pngs = new ArrayList<>();
+		StringBuilder text = new StringBuilder(header);
+		for (int i = 0; i < views.size(); i++) {
+			String name = views.get(i);
+			text.append("\nPicture ").append(i + 1).append(": ");
+			if (name.equals("top")) {
+				pngs.add(Renderer.png(Renderer.top(snap)));
+				text.append("top view, north up and east to the right; higher blocks are brighter.");
+			} else {
+				Renderer.View view = Renderer.View.valueOf(name.toUpperCase(Locale.ROOT));
+				pngs.add(Renderer.png(Renderer.isometric(snap, view)));
+				text.append("isometric ").append(view.caption).append('.');
+			}
+		}
+		return new Images(pngs, text.toString());
+	}
+
 	private static final long MAX_VIEW_VOLUME = 1_000_000;
 
 	private CompletableFuture<Images> viewBuild(JsonObject args) throws ToolError {
@@ -1211,23 +1369,8 @@ public class GameTools {
 				if (rgb != 0) colors[(y * sz + z) * sx + x] = rgb;
 			}
 			return new Renderer.Snapshot(colors, sx, sy, sz);
-		}, server).thenApplyAsync(snap -> {
-			List<byte[]> pngs = new ArrayList<>();
-			StringBuilder text = new StringBuilder("Box x " + x0 + ".." + (x0 + sx - 1) + ", y " + y0 + ".." + y1 + ", z " + z0 + ".." + (z0 + sz - 1) + ".");
-			for (int i = 0; i < views.size(); i++) {
-				String name = views.get(i);
-				text.append("\nPicture ").append(i + 1).append(": ");
-				if (name.equals("top")) {
-					pngs.add(Renderer.png(Renderer.top(snap)));
-					text.append("top view, north up and east to the right; higher blocks are brighter.");
-				} else {
-					Renderer.View view = Renderer.View.valueOf(name.toUpperCase(Locale.ROOT));
-					pngs.add(Renderer.png(Renderer.isometric(snap, view)));
-					text.append("isometric ").append(view.caption).append('.');
-				}
-			}
-			return new Images(pngs, text.toString());
-		});
+		}, server).thenApplyAsync(snap -> render(snap, views,
+			"Box x " + x0 + ".." + (x0 + sx - 1) + ", y " + y0 + ".." + y1 + ", z " + z0 + ".." + (z0 + sz - 1) + "."));
 	}
 
 	private static Renderer.View view(String name) throws ToolError {
