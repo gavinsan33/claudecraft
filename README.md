@@ -2,6 +2,8 @@
 
 A Fabric mod for Minecraft 26.3 that lets you play with Claude Code from in-game chat. Claude can see the world and act in it. It designs and places builds, runs any server command, summons mobs, gives items, changes the time and weather, and so on. Nothing is hard-coded: Claude gets general tools and decides how to use them.
 
+![A Taj Mahal, a giant sprinkled donut and the White House, built by Claude in one world](docs/showcase.jpg)
+
 ## How it works
 
 ```
