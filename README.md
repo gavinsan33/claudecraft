@@ -20,7 +20,7 @@ Play Minecraft with Claude. Type in chat and Claude builds, invents new items, b
 Ask for something that doesn't exist and Claude designs it on the spot and adds it to your world. Everyone sees it right away, with no resource packs and no restart.
 
 - **Items.** "Make me a frost wand that freezes water when I right-click." Claude draws it like a vanilla item and gives it its own powers: weapons, food, real pickaxes and axes, armor you can wear, bows and throwables, and abilities on right-click, on hit, or while held or worn.
-- **Blocks.** "Add ruby ore and a glowing mushroom lamp." You can place, mine and build with them like any other block. Ores can need the right pickaxe, drop gems and experience, and generate underground. Blocks can also face you when placed, store items, work with redstone, and grow or spread on their own.
+- **Blocks.** "Add ruby ore and a glowing mushroom lamp." You can place, mine and build with them like any other block. Ores can need the right pickaxe, drop gems and experience, and generate underground. Blocks can also face you when placed, store items, work with redstone, and grow or spread on their own. They can be animated too, like flickering fire that sets you alight or a shimmering portal you can step into.
 - **Creatures.** "Spawn a family of hippos by the river." Mobs that walk, fly, swim or hop, with their own health, behavior, sounds and drops. You can tame them, ride them, breed them for babies, and get spawn eggs. They can have ranged attacks and special abilities, and appear on their own in the biomes they belong to.
 
 ![A hippo and its baby, custom creatures Claude designed, on a beach](docs/custom-creature.jpg)
@@ -30,7 +30,7 @@ Not quite right? Ask for changes ("make it bigger", "give it spots") and the new
 
 - **Effects.** "Make a lightning gun" or "a black hole gun." Glowing laser beams, crackling lightning, energy waves, orbs with halos and spinning rings, shockwaves and sparks, drawn for real rather than with particles. A black hole can actually pull mobs in.
 
-- **Dimensions.** "Make a moon I can visit." Whole new worlds, created instantly: alien hills under a purple sky, floating islands among the stars, endless caverns. Claude shapes the land, can build it from blocks it invented, fills it with its creatures, and can build portals to get there.
+- **Dimensions.** "Make a moon I can visit." Whole new worlds, created instantly: alien hills under a purple sky, floating islands among the stars, endless caverns. Claude shapes the land, can build it from blocks it invented, fills it with its creatures, and can make portals that work like nether portals to get there and back.
 
 Claude can add crafting, smelting and stonecutting recipes, so survival players can make what it invents. Everything also shows up in a ClaudeCraft tab in the creative inventory. Commands can use your inventions too (`/give @s custom:ruby`, `/summon custom:hippo`), and Claude can save a design to a library and load it into another world.
 

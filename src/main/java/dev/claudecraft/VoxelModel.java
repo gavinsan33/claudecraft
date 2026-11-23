@@ -20,10 +20,18 @@ import java.util.Map;
  * - voxels: "layers": [[row, ...], ...], layers bottom to top (y), rows along +z, characters along +x,
  *   like place_blueprint.
  * - a full cube painted like a vanilla block: "faces": {"all"|"side"|"top"|"bottom"|"north"|...: 16 rows of
- *   16 characters}, each seen from outside the block with up toward the sky (top: north up).
+ *   16 characters}, each seen from outside the block with up toward the sky (top: north up). With "shape":
+ *   "cross" the "cross" (or "all"/"side") picture is drawn on two crossed diagonal planes instead, like flowers
+ *   and fire.
+ *
+ * Animation: a palette color may be a list, which the model cycles through one entry per frame, and "frames"
+ * may list whole shapes ({"faces": ...} or {"layers": ...}) to step through. Frame f uses entry f of each list
+ * (wrapping around); "frame_time" is game ticks per frame. {@link #parse(JsonObject)} is frame 0.
  */
 public final class VoxelModel {
 	public static final int MAX_SIZE = 32;
+	/** Longest animation, in frames, after combining every color cycle and the frames list. */
+	public static final int MAX_FRAMES = 128;
 	private static final String[] FACE_NAMES = {"east", "west", "top", "bottom", "south", "north"};
 
 	public final int sx, sy, sz;
@@ -31,13 +39,20 @@ public final class VoxelModel {
 	public final int[] argb;
 	/** Cubes only: per face (FACE_NAMES order), 16x16 colors indexed [v * 16 + u] in the face's plane axes. */
 	private final int[][] faces;
+	/** Cross shapes only: the picture on both diagonal planes, [v * 16 + u] with v up and u to the right. */
+	private final int[] cross;
 
 	private VoxelModel(int sx, int sy, int sz, int[] argb, int[][] faces) {
+		this(sx, sy, sz, argb, faces, null);
+	}
+
+	private VoxelModel(int sx, int sy, int sz, int[] argb, int[][] faces, int[] cross) {
 		this.sx = sx;
 		this.sy = sy;
 		this.sz = sz;
 		this.argb = argb;
 		this.faces = faces;
+		this.cross = cross;
 	}
 
 	public int at(int x, int y, int z) {
@@ -45,17 +60,39 @@ public final class VoxelModel {
 		return argb[(y * sz + z) * sx + x];
 	}
 
-	/** Parse the stored form. Throws IllegalArgumentException with a readable message for bad input. */
+	/** Parse the stored form (its first frame). Throws IllegalArgumentException with a readable message for bad input. */
 	public static VoxelModel parse(JsonObject model) {
+		return parse(model, 0);
+	}
+
+	/** One frame of an animated model (any frame of a still one is the same). */
+	public static VoxelModel parse(JsonObject model, int frame) {
 		Map<Integer, Integer> palette = new HashMap<>();
 		if (!model.has("palette") || !model.get("palette").isJsonObject()) throw new IllegalArgumentException("palette is required");
 		for (var e : model.getAsJsonObject("palette").entrySet()) {
 			if (e.getKey().codePointCount(0, e.getKey().length()) != 1) throw new IllegalArgumentException("Palette keys must be single characters, got '" + e.getKey() + "'");
-			palette.put(e.getKey().codePointAt(0), color(e.getValue().getAsString()));
+			JsonElement v = e.getValue();
+			if (v.isJsonArray()) {
+				JsonArray cycle = v.getAsJsonArray();
+				if (cycle.isEmpty()) throw new IllegalArgumentException("Palette color list for '" + e.getKey() + "' is empty");
+				v = cycle.get(Math.floorMod(frame, cycle.size()));
+			}
+			palette.put(e.getKey().codePointAt(0), color(v.getAsString()));
 		}
-		if (model.has("faces")) return parseFaces(model.getAsJsonObject("faces"), palette);
-		if (!model.has("layers") || !model.get("layers").isJsonArray()) throw new IllegalArgumentException("layers is required");
-		JsonArray layers = model.getAsJsonArray("layers");
+		JsonObject shape = model;
+		if (model.has("frames") && model.get("frames").isJsonArray() && !model.getAsJsonArray("frames").isEmpty()) {
+			JsonArray frames = model.getAsJsonArray("frames");
+			JsonElement f = frames.get(Math.floorMod(frame, frames.size()));
+			if (!f.isJsonObject()) throw new IllegalArgumentException("Each frame is an object with faces or layers");
+			shape = f.getAsJsonObject();
+		}
+		boolean cross = model.has("shape") && model.get("shape").getAsString().equals("cross");
+		if (shape.has("faces")) {
+			return cross ? parseCross(shape.getAsJsonObject("faces"), palette) : parseFaces(shape.getAsJsonObject("faces"), palette);
+		}
+		if (cross) throw new IllegalArgumentException("shape cross needs faces with a cross (or all) picture");
+		if (!shape.has("layers") || !shape.get("layers").isJsonArray()) throw new IllegalArgumentException("layers is required");
+		JsonArray layers = shape.getAsJsonArray("layers");
 		int sy = layers.size(), sz = 0, sx = 0;
 		List<List<int[]>> rows = new ArrayList<>();
 		for (JsonElement layer : layers) {
@@ -85,6 +122,61 @@ public final class VoxelModel {
 		Integer c = palette.get(cp);
 		if (c == null) throw new IllegalArgumentException("Character '" + new String(Character.toChars(cp)) + "' isn't in the palette");
 		return c;
+	}
+
+	/** How many frames the model's animation has: the smallest count that every color cycle and the frames list fit. */
+	public static int frameCount(JsonObject model) {
+		long n = 1;
+		if (model.has("frames") && model.get("frames").isJsonArray()) n = lcm(n, Math.max(1, model.getAsJsonArray("frames").size()));
+		if (model.has("palette") && model.get("palette").isJsonObject()) {
+			for (var e : model.getAsJsonObject("palette").entrySet()) {
+				if (e.getValue().isJsonArray()) n = lcm(n, Math.max(1, e.getValue().getAsJsonArray().size()));
+				if (n > MAX_FRAMES) return (int) Math.min(n, Integer.MAX_VALUE);
+			}
+		}
+		return (int) n;
+	}
+
+	/** Game ticks each frame shows for (default 2, 10 frames a second). */
+	public static int frameTime(JsonObject model) {
+		return model.has("frame_time") ? Math.max(1, Math.min(200, model.get("frame_time").getAsInt())) : 2;
+	}
+
+	/** The frame showing at a game time, for a model whose animation may be shifted by `offset` frames. */
+	public static int frameAt(JsonObject model, long gameTime, int offset) {
+		int n = frameCount(model);
+		return n <= 1 ? 0 : (int) Math.floorMod(gameTime / frameTime(model) + offset, (long) n);
+	}
+
+	private static long lcm(long a, long b) {
+		long x = a, y = b;
+		while (y != 0) {
+			long t = x % y;
+			x = y;
+			y = t;
+		}
+		return a / x * b;
+	}
+
+	/** A picture on two crossed diagonal planes. The voxel version (for outlines and pictures) is the two diagonals. */
+	private static VoxelModel parseCross(JsonObject f, Map<Integer, Integer> palette) {
+		String key = f.has("cross") ? "cross" : f.has("all") ? "all" : f.has("side") ? "side" : null;
+		if (key == null) throw new IllegalArgumentException("shape cross needs faces.cross: 16 rows of 16 characters");
+		JsonArray rows = f.getAsJsonArray(key);
+		if (rows.size() != 16) throw new IllegalArgumentException("The cross picture needs 16 rows, got " + rows.size());
+		int[] grid = new int[256];
+		for (int r = 0; r < 16; r++) {
+			int[] cps = rows.get(r).getAsString().codePoints().toArray();
+			if (cps.length != 16) throw new IllegalArgumentException("Cross row " + (r + 1) + " needs 16 characters, got " + cps.length);
+			for (int c = 0; c < 16; c++) grid[(15 - r) * 16 + c] = lookup(palette, cps[c]);
+		}
+		int[] argb = new int[16 * 16 * 16];
+		for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) {
+			int c = grid[y * 16 + x];
+			argb[(y * 16 + x) * 16 + x] = c;
+			argb[(y * 16 + (15 - x)) * 16 + x] = c;
+		}
+		return new VoxelModel(16, 16, 16, argb, null, grid);
 	}
 
 	private static VoxelModel parseFaces(JsonObject f, Map<Integer, Integer> palette) {
@@ -191,6 +283,11 @@ public final class VoxelModel {
 		public boolean translucent() {
 			return (argb >>> 24) < 255;
 		}
+
+		/** On a cross shape's diagonal planes, which (like vanilla's plants) aren't shaded by the side they face. */
+		public boolean diagonal() {
+			return nx != 0 && nz != 0;
+		}
 	}
 
 	// Per face: the axis it faces along (0 x, 1 y, 2 z), and its in-plane axes u and v.
@@ -225,6 +322,7 @@ public final class VoxelModel {
 	}
 
 	private List<Quad> mesh(float unit, float[] off, boolean block) {
+		if (cross != null) return crossMesh(unit, off);
 		int[] size = {sx, sy, sz};
 		List<Quad> quads = new ArrayList<>();
 		for (int f = 0; f < 6; f++) {
@@ -263,6 +361,39 @@ public final class VoxelModel {
 						for (int d = 0; d < 3; d++) corners[k * 3 + d] = off[d] + p[d] * unit;
 					}
 					quads.add(new Quad(corners, f, n[0], n[1], n[2], r[4], onBoundary ? f : -1));
+				}
+			}
+		}
+		return quads;
+	}
+
+	/**
+	 * The cross picture on both diagonals of the 16-voxel cube, seen from either side. Like vanilla's cross models
+	 * the planes stop a little short of the corners.
+	 */
+	private List<Quad> crossMesh(float unit, float[] off) {
+		List<Quad> quads = new ArrayList<>();
+		float in = 0.8f, len = 16 - 2 * in; // voxels from each corner, and the plane's width along its diagonal
+		float s = (float) Math.sqrt(0.5);
+		// Each plane: where its left edge starts (x, z) and which way it runs along the diagonal (dx, dz).
+		float[][] planes = {{in, in, 1, 1}, {in, 16 - in, 1, -1}};
+		for (float[] pl : planes) {
+			float nx = -pl[3] * s, nz = pl[2] * s; // the side that sees the picture unmirrored
+			for (int[] r : rects(cross, 16, 16)) {
+				float a = r[0] / 16f * len, b = (r[0] + r[2]) / 16f * len;
+				float y0 = r[1], y1 = r[1] + r[3];
+				float[][] pts = {
+					{pl[0] + pl[2] * a, y0, pl[1] + pl[3] * a}, {pl[0] + pl[2] * b, y0, pl[1] + pl[3] * b},
+					{pl[0] + pl[2] * b, y1, pl[1] + pl[3] * b}, {pl[0] + pl[2] * a, y1, pl[1] + pl[3] * a}};
+				for (int side = 0; side < 2; side++) {
+					float[] corners = new float[12];
+					for (int k = 0; k < 4; k++) {
+						float[] p = pts[side == 0 ? k : (3 - k + 1) % 4]; // the back side winds the other way
+						for (int d = 0; d < 3; d++) corners[k * 3 + d] = off[d] + p[d] * unit;
+					}
+					float sn = side == 0 ? 1 : -1;
+					int face = Math.abs(nx) > 0 && sn * nz >= 0 ? 4 : 5; // nominally south or north, for shading
+					quads.add(new Quad(corners, face, sn * nx, 0, sn * nz, r[4], -1));
 				}
 			}
 		}
@@ -348,6 +479,27 @@ public final class VoxelModel {
 		check(flat.at(0, 1, 0) != 0 && flat.at(1, 1, 0) == 0 && flat.at(1, 0, 0) != 0, "top pixel row is the top layer");
 
 		check(color("#80FFFFFF") == 0x80FFFFFF, "alpha colors");
+
+		JsonObject cyc = JsonParser.parseString("{\"palette\":{\"p\":[\"#110000\",\"#220000\",\"#330000\"],\"q\":[\"#000011\",\"#000022\"]},\"layers\":[[\"pq\"]]}").getAsJsonObject();
+		check(frameCount(cyc) == 6, "cycles of 3 and 2 colors make 6 frames");
+		check(parse(cyc, 0).at(0, 0, 0) == 0xFF110000 && parse(cyc, 4).at(0, 0, 0) == 0xFF220000 && parse(cyc, 5).at(1, 0, 0) == 0xFF000022, "palette cycles by frame");
+		check(parse(cyc).at(0, 0, 0) == 0xFF110000, "a still parse is frame 0");
+		JsonObject flip = JsonParser.parseString("{\"palette\":{\"a\":\"#FFFFFF\"},\"frame_time\":3,\"frames\":[{\"layers\":[[\"a.\"]]},{\"layers\":[[\".a\"]]}]}").getAsJsonObject();
+		check(frameCount(flip) == 2 && parse(flip, 1).at(1, 0, 0) != 0 && parse(flip, 1).at(0, 0, 0) == 0, "frames swap shapes");
+		check(frameAt(flip, 0, 0) == 0 && frameAt(flip, 3, 0) == 1 && frameAt(flip, 6, 0) == 0 && frameAt(flip, 0, 1) == 1, "frames advance with game time");
+
+		JsonObject flower = new JsonObject();
+		flower.add("palette", JsonParser.parseString("{\"r\":\"#FF0000\"}"));
+		flower.addProperty("shape", "cross");
+		JsonObject cf = new JsonObject();
+		String[] crossRows = new String[16];
+		for (int r = 0; r < 16; r++) crossRows[r] = r == 15 ? "r".repeat(16) : ".".repeat(16);
+		cf.add("cross", JsonParser.parseString(new com.google.gson.Gson().toJson(crossRows)));
+		flower.add("faces", cf);
+		List<Quad> xq = parse(flower).mesh(true);
+		check(xq.size() == 4, "a one-strip cross is a strip on each plane, both sides");
+		check(xq.stream().allMatch(q -> q.boundary() == -1 && q.corners()[1] < 0.07f), "cross quads are never culled and sit at the bottom");
+		check(parse(flower).at(3, 0, 3) != 0 && parse(flower).at(3, 0, 12) != 0 && parse(flower).at(3, 0, 5) == 0, "cross voxels are the diagonals");
 		try {
 			parse(JsonParser.parseString("{\"palette\":{},\"layers\":[[\"x\"]]}").getAsJsonObject());
 			check(false, "unknown characters are rejected");

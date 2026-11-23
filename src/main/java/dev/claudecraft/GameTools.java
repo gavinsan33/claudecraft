@@ -492,19 +492,48 @@ public class GameTools {
 				+ "front), the tool that mines it and what it drops (ores: tool pickaxe, tier iron, drops custom:ruby 1-2, xp), "
 				+ "storage (a chest-like inventory), redstone (power emitted, commands when powered or unpowered), commands "
 				+ "on right-click, when stepped on and on random ticks (about once a minute per block, for growth or "
-				+ "spreading), natural generation as an ore in the world (generate), and recipes. Updating changes blocks "
-				+ "already placed; light applies to blocks placed afterwards. Up to " + CustomBlocks.SLOTS + " block designs per world."
+				+ "spreading), natural generation as an ore in the world (generate), and recipes. Animated blocks like fire, "
+				+ "portals, lava or blinking machines: give a palette color a list of colors to cycle through (one per frame; "
+				+ "several letters cycling the same colors at shifted starting points make swirls and flowing bands, which is "
+				+ "cheap and looks great), and/or frames (whole faces or layers drawings to step through, e.g. 4 flickering "
+				+ "flame pictures). frame_time is game ticks per frame (default 2; 20 ticks is a second). shape cross draws "
+				+ "faces.cross (16x16, '.' see-through) on two crossed diagonal planes like flowers and fire. Lively touches: "
+				+ "glow (full brightness in the dark), particles (flame, smoke, portal, soul_fire_flame, end_rod, dust with a "
+				+ "color...), ambient_sound, burns (sets things alight like fire), portal (stand in it to travel to a "
+				+ "dimension and back, like a nether portal; a matching return portal is built on the far side) and "
+				+ "inside_commands. Updating changes blocks already placed; light applies to blocks placed afterwards. Up to "
+				+ CustomBlocks.SLOTS + " block designs per world."
 				+ commandsNote,
 			"""
 				{"type":"object","properties":{
 				  "id":{"type":"string","description":"Lowercase letters, digits and underscores, e.g. ruby_ore."},
 				  "name":{"type":"string"},
 				  "description":{"type":"string"},
-				  "palette":{"type":"object","additionalProperties":{"type":"string"}},
+				  "palette":{"type":"object","additionalProperties":{"anyOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},
+				    "description":"Character to color. A list of colors cycles one per animation frame, e.g. \\"p\\": [\\"#5A1A9A\\", \\"#7B2FD0\\", \\"#A060FF\\", \\"#7B2FD0\\"]."},
 				  "faces":{"type":"object","additionalProperties":{"type":"array","items":{"type":"string"}}},
 				  "layers":{"type":"array","items":{"type":"array","items":{"type":"string"}}},
+				  "shape":{"type":"string","enum":["cube","cross"],"description":"cross: faces.cross drawn on two crossed diagonal planes (flowers, fire, cobwebs). Default cube."},
+				  "frames":{"type":"array","items":{"type":"object","properties":{
+				    "faces":{"type":"object","additionalProperties":{"type":"array","items":{"type":"string"}}},
+				    "layers":{"type":"array","items":{"type":"array","items":{"type":"string"}}}}},
+				    "description":"Animation frames, each a whole drawing (faces or layers, same palette). Replaces the top-level faces/layers."},
+				  "frame_time":{"type":"integer","description":"Game ticks per animation frame, default 2 (10 frames a second)."},
+				  "desync":{"type":"boolean","description":"Each placed block starts its animation at a different point (good for fire fields; leave off for portals so their patterns line up)."},
 				  "properties":{"type":"object","properties":{
 				    "light":{"type":"integer"},
+				    "glow":{"type":"boolean","description":"Drawn at full brightness even in the dark, like lava. Pair with light."},
+				    "particles":{"type":"array","items":{"type":"object","properties":{
+				      "type":{"type":"string","description":"flame, small_flame, soul_fire_flame, smoke, large_smoke, campfire_cosy_smoke, portal, reverse_portal, enchant, end_rod, electric_spark, glow, dripping_lava, dripping_water, falling_water, snowflake, cherry_leaves, spore_blossom_air, firefly, note, heart, happy_villager, or dust (with color)."},
+				      "where":{"type":"string","enum":%s,"description":"inside the model (default), rising off the top, or drifting off the sides."},
+				      "count":{"type":"integer","description":"Per burst, default 1 (a nether portal uses 4). Bursts come about twice a second per block near players."},
+				      "chance":{"type":"number","description":"Chance of each burst, 0 to 1 (default 1)."},
+				      "speed":{"type":"number","description":"Default 0.02."},
+				      "color":{"type":"string"},"size":{"type":"number"}}}},
+				    "ambient_sound":{"type":"object","properties":{"sound":{"type":"string","description":"e.g. block.fire.ambient, block.portal.ambient, block.lava.pop, block.beacon.ambient."},"chance":{"type":"number","description":"Per burst, default 0.05."},"volume":{"type":"number"}}},
+				    "burns":{"description":"true (or damage per hit) to set entities inside it on fire and hurt them, like fire. Use collision none."},
+				    "portal":{"type":"string","description":"Dimension it leads to (a custom dimension id, the_nether, the_end or overworld). Standing in it travels there after a few seconds (instantly in creative); in that dimension it leads back to the overworld. Use collision none and a frame of other blocks around it."},
+				    "inside_commands":{"type":"array","items":{"type":"string"},"description":"Run as whatever is inside the block (@s), at most once a second each; use collision none."},
 				    "hardness":{"type":"number"},
 				    "sound":{"type":"string","enum":%s},
 				    "collision":{"type":"string","enum":["model","full","none"]},
@@ -531,7 +560,7 @@ public class GameTools {
 				      "dimension":{"type":"string","description":"Default minecraft:overworld."}}},
 				    "recipes":%s
 				  }}
-				},"required":["id","name","palette"]}""".formatted(json(CustomBlocks.SOUNDS), json(CustomBlocks.TOOLS), json(CustomItems.TIERS), RECIPES_SCHEMA),
+				},"required":["id","name","palette"]}""".formatted(json(CustomBlocks.PARTICLE_PLACES), json(CustomBlocks.SOUNDS), json(CustomBlocks.TOOLS), json(CustomItems.TIERS), RECIPES_SCHEMA),
 			this::defineBlock);
 
 		register("define_entity",
@@ -1601,6 +1630,30 @@ public class GameTools {
 		if (o.has(key) && !allowed.contains(o.get(key).getAsString())) throw new ToolError(what + " must be one of " + String.join(", ", allowed));
 	}
 
+	/** Particles, ambient sound, burning and portals on a block. */
+	private void checkBlockLife(JsonObject props) throws ToolError {
+		if (props.has("particles") && !props.get("particles").isJsonArray()) throw new ToolError("particles must be a list");
+		for (JsonObject spec : CustomBlocks.particleSpecs(props)) {
+			try {
+				CustomBlocks.particle(spec);
+			} catch (IllegalArgumentException | IllegalStateException | ClassCastException e) {
+				throw new ToolError("particles: " + e.getMessage());
+			}
+			oneOf(spec, "where", CustomBlocks.PARTICLE_PLACES, "particles.where");
+		}
+		JsonObject amb = CustomBlocks.ambientSound(props);
+		if (amb != null && (!amb.has("sound") || Effects.sound(amb.get("sound").getAsString()) == null)) {
+			throw new ToolError("ambient_sound: unknown sound " + (amb.has("sound") ? amb.get("sound").getAsString() : "(missing)"));
+		}
+		if (props.has("burns") && !props.get("burns").isJsonPrimitive()) throw new ToolError("burns is true or a damage number");
+		if (props.has("portal")) {
+			String target = props.get("portal").getAsString();
+			if (Dimensions.level(server, target) == null) {
+				throw new ToolError("portal: no dimension " + target + " (use a custom dimension's id, overworld, the_nether or the_end)");
+			}
+		}
+	}
+
 	private static JsonObject obj(JsonObject o, String key) throws ToolError {
 		if (!o.has(key)) return null;
 		if (!o.get(key).isJsonObject()) throw new ToolError(key + " must be an object");
@@ -1712,17 +1765,31 @@ public class GameTools {
 		if (old != null && !CustomBlocks.isBlock(old)) throw new ToolError(id + " is already a custom item or creature; pick another id");
 		JsonObject model = new JsonObject();
 		model.add("palette", args.get("palette"));
-		if (args.has("faces")) model.add("faces", args.get("faces"));
+		boolean framed = args.has("frames") && args.get("frames").isJsonArray() && !args.getAsJsonArray("frames").isEmpty();
+		if (framed) model.add("frames", args.get("frames"));
+		else if (args.has("faces")) model.add("faces", args.get("faces"));
 		else if (args.has("layers")) model.add("layers", args.get("layers"));
-		else throw new ToolError("Give the block as faces (a painted cube) or layers (a voxel shape)");
-		VoxelModel parsed;
-		try {
-			parsed = VoxelModel.parse(model);
-		} catch (IllegalArgumentException | IllegalStateException | ClassCastException e) {
-			throw new ToolError("Bad model: " + e.getMessage());
+		else throw new ToolError("Give the block as faces (a painted cube), layers (a voxel shape) or frames (an animation)");
+		oneOf(args, "shape", List.of("cube", "cross"), "shape");
+		if (args.has("shape") && args.get("shape").getAsString().equals("cross")) model.addProperty("shape", "cross");
+		if (args.has("frame_time")) model.addProperty("frame_time", Math.max(1, Math.min(200, args.get("frame_time").getAsInt())));
+		if (args.has("desync") && args.get("desync").getAsBoolean()) model.addProperty("desync", true);
+		int frames = VoxelModel.frameCount(model);
+		if (frames > VoxelModel.MAX_FRAMES) {
+			throw new ToolError("That animation repeats only every " + frames + " frames (at most " + VoxelModel.MAX_FRAMES
+				+ "); give color lists and frames lengths that divide evenly, like 2, 4 and 8");
 		}
-		if (parsed.sx > 16 || parsed.sy > 16 || parsed.sz > 16) throw new ToolError("Blocks are at most 16 voxels per side");
+		for (int f = 0; f < frames; f++) {
+			VoxelModel parsed;
+			try {
+				parsed = VoxelModel.parse(model, f);
+			} catch (IllegalArgumentException | IllegalStateException | ClassCastException | UnsupportedOperationException e) {
+				throw new ToolError("Bad model" + (frames > 1 ? " (frame " + (f + 1) + ")" : "") + ": " + e.getMessage());
+			}
+			if (parsed.sx > 16 || parsed.sy > 16 || parsed.sz > 16) throw new ToolError("Blocks are at most 16 voxels per side");
+		}
 		JsonObject props = args.has("properties") ? args.getAsJsonObject("properties") : new JsonObject();
+		checkBlockLife(props);
 		oneOf(props, "sound", CustomBlocks.SOUNDS, "sound");
 		oneOf(props, "collision", List.of("model", "full", "none"), "collision");
 		oneOf(props, "tool", CustomBlocks.TOOLS, "tool");
