@@ -2,7 +2,7 @@
 
 Play Minecraft with Claude. Type in chat and Claude builds, invents new items, blocks and creatures, and runs commands for you, live in your world.
 
-![A Taj Mahal, a giant sprinkled donut and the White House, built by Claude in one world](docs/showcase.jpg)
+![Claude's asterisk logo and the word CLAUDE built in orange blocks over the ocean, with Claude's status line showing it at work](docs/hero.jpg)
 
 **[Download the latest release](https://github.com/gavinsan33/claudecraft/releases/latest)** · Minecraft 26.3 · Fabric
 
@@ -13,6 +13,8 @@ Play Minecraft with Claude. Type in chat and Claude builds, invents new items, b
 - **Invent blocks.** "Add ruby ore and a glowing mushroom lamp." Custom blocks you can place, mine and build with.
 - **Invent creatures.** "Spawn a family of hippos by the river." Animated mobs with their own size, health, behavior, sounds and drops.
 - **Do anything a server operator can.** Give items, summon mobs, change the time and weather, teleport, set up redstone.
+
+![A Taj Mahal, a giant sprinkled donut and the White House, built by Claude in one world](docs/showcase.jpg)
 
 ![A hippo and its baby, custom creatures Claude designed, on a beach](docs/custom-creature.jpg)
 
