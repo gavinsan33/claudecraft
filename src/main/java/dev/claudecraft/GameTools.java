@@ -35,11 +35,14 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** The MCP tools Claude uses to observe and act in the world. All world access runs on the server thread. */
 public class GameTools {
@@ -63,6 +66,9 @@ public class GameTools {
 	private final Map<String, Tool> tools = new LinkedHashMap<>();
 	/** Name of the player whose message Claude is currently handling. */
 	private volatile String defaultPlayer;
+	private final AtomicInteger buildIds = new AtomicInteger();
+	/** Results of background builds, handed to Claude with its next tool result. */
+	private final ConcurrentLinkedQueue<String> reports = new ConcurrentLinkedQueue<>();
 
 	public GameTools(MinecraftServer server, Config cfg, UndoHistory undo, BuildQueue builds) {
 		this.server = server;
@@ -78,6 +84,11 @@ public class GameTools {
 
 	public UndoHistory undoHistory() {
 		return undo;
+	}
+
+	/** Completes once every queued build has been placed. Any thread. */
+	public CompletableFuture<Void> buildsIdle() {
+		return builds.idle();
 	}
 
 	// ---------------------------------------------------------------- MCP plumbing
@@ -133,6 +144,9 @@ public class GameTools {
 				text = "Error: interrupted.";
 			}
 		}
+		StringBuilder finished = new StringBuilder();
+		for (String r; (r = reports.poll()) != null; ) finished.append('\n').append(r);
+		if (!finished.isEmpty()) text += "\n\nFinished in the background:" + finished;
 		JsonObject result = new JsonObject();
 		JsonArray content = new JsonArray();
 		JsonObject c = new JsonObject();
@@ -158,6 +172,11 @@ public class GameTools {
 		{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"}},"required":["x","y","z"]}""";
 	private static final String DIM_SCHEMA = """
 		{"type":"string","description":"Dimension id, e.g. minecraft:the_nether. Defaults to the requesting player's dimension."}""";
+	private static final String DURATION_SCHEMA = """
+		{"type":"number","description":"Optional: stretch or squeeze this build's animation to take about this many seconds (max 120). Default pacing is fast."}""";
+	private static final String QUEUED =
+		" Returns immediately: blocks animate into place in the background, one queued build after another, while you keep working. "
+			+ "Each build's result (block count, anything that couldn't survive) is attached to a later tool result. Undoable.";
 
 	private void registerAll() {
 		register("get_context",
@@ -187,54 +206,62 @@ public class GameTools {
 				+ "(e.g. \"s\":\"minecraft:stone_bricks\", \"D\":\"minecraft:oak_door[facing=north,half=lower]\"). "
 				+ "layers is bottom-to-top: layers[i] is placed at y = origin.y + i. Each layer is a list of rows: row j is at "
 				+ "z = origin.z + j, and character k in a row is at x = origin.x + k. '.' and ' ' leave the existing block "
-				+ "untouched unless you define them in the palette. Map a character to minecraft:air to clear blocks. "
-				+ "Blocks appear gradually with sounds while players watch; the call returns when placement is finished. Undoable.",
+				+ "untouched unless you define them in the palette. Map a character to minecraft:air to clear blocks." + QUEUED,
 			"""
 				{"type":"object","properties":{
 				  "origin":%s,
 				  "palette":{"type":"object","additionalProperties":{"type":"string"}},
 				  "layers":{"type":"array","items":{"type":"array","items":{"type":"string"}}},
+				  "duration_seconds":%s,
 				  "dimension":%s
-				},"required":["origin","palette","layers"]}""".formatted(POS_SCHEMA, DIM_SCHEMA),
+				},"required":["origin","palette","layers"]}""".formatted(POS_SCHEMA, DURATION_SCHEMA, DIM_SCHEMA),
 			this::placeBlueprint);
 
 		register("fill_region",
 			"Fill the box between two corners (inclusive) with one block state. Modes: solid (whole box), hollow (shell of "
 				+ "the block with air inside), outline (shell only, inside untouched), walls (four vertical sides only). "
 				+ "Optional replace limits changes to blocks matching that id (e.g. minecraft:grass_block) or exact state. "
-				+ "Use block minecraft:air to clear space. "
-				+ "Blocks appear gradually with sounds while players watch; the call returns when placement is finished. Undoable.",
+				+ "Use block minecraft:air to clear space. With replace, it waits for queued builds first so it sees them." + QUEUED,
 			"""
 				{"type":"object","properties":{
 				  "from":%s,"to":%s,
 				  "block":{"type":"string"},
 				  "mode":{"type":"string","enum":["solid","hollow","outline","walls"]},
 				  "replace":{"type":"string","description":"Only replace blocks of this id/state."},
+				  "duration_seconds":%s,
 				  "dimension":%s
-				},"required":["from","to","block"]}""".formatted(POS_SCHEMA, POS_SCHEMA, DIM_SCHEMA),
+				},"required":["from","to","block"]}""".formatted(POS_SCHEMA, POS_SCHEMA, DURATION_SCHEMA, DIM_SCHEMA),
 			this::fillRegion);
 
 		register("place_blocks",
 			"Place individual blocks at absolute coordinates. Each entry is {\"x\":..,\"y\":..,\"z\":..,\"block\":\"minecraft:...\"} "
-				+ "or a compact array [x, y, z, \"block\"]. "
-				+ "Blocks appear gradually with sounds while players watch; the call returns when placement is finished. Undoable.",
+				+ "or a compact array [x, y, z, \"block\"]." + QUEUED,
 			"""
 				{"type":"object","properties":{
 				  "blocks":{"type":"array","items":{}},
+				  "duration_seconds":%s,
 				  "dimension":%s
-				},"required":["blocks"]}""".formatted(DIM_SCHEMA),
+				},"required":["blocks"]}""".formatted(DURATION_SCHEMA, DIM_SCHEMA),
 			this::placeBlocks);
+
+		register("wait_for_builds",
+			"Wait until every queued build has finished animating, then return their results. Call it before your final "
+				+ "message so you can fix anything that failed and so you don't announce a build that's still going up.",
+			"""
+				{"type":"object","properties":{}}""",
+			args -> afterBuilds(() -> "All builds are finished."));
 
 		register("scan_area",
 			"Read the blocks in a box (inclusive corners) in the same layer/row/palette format place_blueprint uses, "
-				+ "with origin at the minimum corner. '.' = air. Use it to inspect terrain, existing builds, or verify your work.",
+				+ "with origin at the minimum corner. '.' = air. Use it to inspect terrain, existing builds, or verify your work. "
+				+ "Waits for queued builds to finish first.",
 			"""
 				{"type":"object","properties":{
 				  "from":%s,"to":%s,
 				  "ignore_properties":{"type":"boolean","description":"Show only block ids, not full states (smaller output)."},
 				  "dimension":%s
 				},"required":["from","to"]}""".formatted(POS_SCHEMA, POS_SCHEMA, DIM_SCHEMA),
-			this::scanArea);
+			args -> afterBuilds(() -> scanArea(args)));
 
 		register("get_terrain",
 			"Get a surface map of a horizontal area: the Y of the top non-leaf solid or liquid block for every column, "
@@ -249,8 +276,8 @@ public class GameTools {
 			this::getTerrain);
 
 		register("undo",
-			"Revert your most recent block changes made with place_blueprint, fill_region, or place_blocks. "
-				+ "Each step is one chat turn's worth of changes (including the current turn).",
+			"Revert your most recent block changes made with the placement tools (anything except run_commands). "
+				+ "Each step is one chat turn's worth of changes (including the current turn). Waits for queued builds first.",
 			"""
 				{"type":"object","properties":{"steps":{"type":"integer","description":"How many steps to undo (default 1)."}}}""",
 			args -> undo(optInt(args, "steps", 1)));
@@ -321,6 +348,27 @@ public class GameTools {
 				throw new ToolError("Invalid block state '" + s + "': " + e.getMessage());
 			}
 		}
+	}
+
+	/** Queue a build and return right away; its result goes into {@link #reports} when it's done. */
+	private String queueBuild(ServerLevel level, Map<BlockPos, BlockState> changes, JsonObject args) {
+		int id = buildIds.incrementAndGet();
+		double secs = args.has("duration_seconds") ? args.get("duration_seconds").getAsDouble() : 0;
+		builds.enqueue(level, changes, undo, secs, r -> reports.add("Build #" + id + ": " + r));
+		return "Queued build #" + id + " (" + changes.size() + " blocks). Everything queued is done in about " + builds.secondsLeft()
+			+ "s. It's animating now; keep working.";
+	}
+
+	/** Run on the server thread once queued builds have finished, so reads see what they placed. */
+	private CompletableFuture<String> afterBuilds(Callable<Object> work) {
+		return builds.idle().thenComposeAsync(v -> {
+			try {
+				Object r = work.call();
+				return r instanceof CompletableFuture<?> f ? f.thenApply(o -> (String) o) : CompletableFuture.completedFuture((String) r);
+			} catch (Exception e) {
+				return CompletableFuture.failedFuture(e);
+			}
+		}, server);
 	}
 
 	private void checkSize(long n) throws ToolError {
@@ -461,7 +509,7 @@ public class GameTools {
 
 	// ---------------------------------------------------------------- placement tools
 
-	private CompletableFuture<String> placeBlueprint(JsonObject args) throws ToolError {
+	private String placeBlueprint(JsonObject args) throws ToolError {
 		ServerLevel level = level(args);
 		BlockPos origin = pos(args, "origin");
 		if (!args.has("palette") || !args.has("layers")) throw new ToolError("palette and layers are required");
@@ -496,10 +544,16 @@ public class GameTools {
 			checkSize(changes.size());
 		}
 		if (!unknown.isEmpty()) throw new ToolError("Characters not in palette: " + String.join(" ", unknown) + " (nothing was placed)");
-		return builds.enqueue(level, changes, undo, defaultPlayer);
+		return queueBuild(level, changes, args);
 	}
 
-	private CompletableFuture<String> fillRegion(JsonObject args) throws ToolError {
+	private Object fillRegion(JsonObject args) throws ToolError {
+		// A replace filter reads the world, so let queued builds land first.
+		if (args.has("replace") && !args.get("replace").getAsString().isBlank()) return afterBuilds(() -> fillRegionNow(args));
+		return fillRegionNow(args);
+	}
+
+	private String fillRegionNow(JsonObject args) throws ToolError {
 		ServerLevel level = level(args);
 		BlockPos a = pos(args, "from"), b = pos(args, "to");
 		BlockParser parser = new BlockParser(level);
@@ -544,10 +598,10 @@ public class GameTools {
 				}
 			}
 		}
-		return builds.enqueue(level, changes, undo, defaultPlayer);
+		return queueBuild(level, changes, args);
 	}
 
-	private CompletableFuture<String> placeBlocks(JsonObject args) throws ToolError {
+	private String placeBlocks(JsonObject args) throws ToolError {
 		ServerLevel level = level(args);
 		if (!args.has("blocks") || !args.get("blocks").isJsonArray()) throw new ToolError("blocks must be an array");
 		JsonArray arr = args.getAsJsonArray("blocks");
@@ -569,18 +623,22 @@ public class GameTools {
 			}
 			changes.put(p, parser.parse(block));
 		}
-		return builds.enqueue(level, changes, undo, defaultPlayer);
+		return queueBuild(level, changes, args);
 	}
 
-	/** Must be called on the server thread. Completes once the (animated) revert has finished. */
+	/** Must be called on the server thread. Waits for queued builds, then completes once the (animated) revert has finished. */
 	public CompletableFuture<String> undo(int steps) {
+		return afterBuilds(() -> undoNow(steps));
+	}
+
+	private CompletableFuture<String> undoNow(int steps) {
 		List<UndoHistory.Entry> entries = undo.pop(Math.max(1, steps));
 		if (entries.isEmpty()) return CompletableFuture.completedFuture("Nothing to undo.");
 		List<CompletableFuture<String>> parts = new ArrayList<>();
 		for (UndoHistory.Entry entry : entries) {
 			for (var dimEntry : entry.originals.entrySet()) {
 				ServerLevel lvl = server.getLevel(dimEntry.getKey());
-				if (lvl != null) parts.add(builds.enqueue(lvl, dimEntry.getValue(), null, defaultPlayer));
+				if (lvl != null) parts.add(builds.enqueue(lvl, dimEntry.getValue(), null, 0, null));
 			}
 		}
 		int n = entries.size();

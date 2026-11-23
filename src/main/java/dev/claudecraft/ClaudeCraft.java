@@ -42,6 +42,7 @@ public class ClaudeCraft implements ModInitializer {
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> shutdown());
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
 			if (builds != null) builds.tick();
+			if (bridge != null) bridge.tickStatus(builds);
 		});
 
 		ServerMessageEvents.CHAT_MESSAGE.register((message, sender, params) -> {
