@@ -4,9 +4,11 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.mojang.brigadier.StringReader;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.minecraft.commands.CommandSource;
 import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.arguments.blocks.BlockPredicateArgument;
 import net.minecraft.commands.arguments.blocks.BlockStateParser;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
@@ -22,10 +24,13 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.Mirror;
 import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.pattern.BlockInWorld;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -46,6 +51,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 
 /** The MCP tools Claude uses to observe and act in the world. All world access runs on the server thread. */
 public class GameTools {
@@ -166,7 +172,11 @@ public class GameTools {
 	}
 
 	private void register(String name, String description, String schemaJson, Handler handler) {
-		tools.put(name, new Tool(name, description, JsonParser.parseString(schemaJson).getAsJsonObject(), handler));
+		JsonObject schema = JsonParser.parseString(schemaJson).getAsJsonObject();
+		// Every placement tool (the ones with duration_seconds) also takes a mask.
+		JsonObject props = schema.getAsJsonObject("properties");
+		if (props != null && props.has("duration_seconds")) props.add("mask", JsonParser.parseString(MASK_SCHEMA));
+		tools.put(name, new Tool(name, description, schema, handler));
 	}
 
 	// ---------------------------------------------------------------- tool definitions
@@ -179,6 +189,10 @@ public class GameTools {
 		{"type":"string","description":"A block state, or a random mix in WorldEdit pattern syntax, e.g. \\"70%minecraft:stone_bricks,20%minecraft:mossy_stone_bricks,10%minecraft:cracked_stone_bricks\\"."}""";
 	private static final String DURATION_SCHEMA = """
 		{"type":"number","description":"Optional: stretch or squeeze this build's animation to take about this many seconds (max 120). Default pacing is fast."}""";
+	private static final String MASK_SCHEMA = """
+		{"type":"string","description":"Optional WorldEdit-style mask: only change blocks where it matches, checked as each block is placed. Space-separated terms must all match. A term is a comma list of blocks, block tags or partial states (minecraft:air, #minecraft:logs, minecraft:oak_stairs[half=top]), or #existing (not air), #solid, #liquid, #surface (solid with no solid block above). Prefix >X for 'directly above X', <X for 'directly below X', !X to negate. Examples: minecraft:air (never overwrite anything), !#existing >#solid (air resting on solid ground), #surface !#minecraft:logs."}""";
+	private static final String AREA_SCHEMA = """
+		{"type":"object","properties":{"x":{"type":"integer"},"z":{"type":"integer"}},"required":["x","z"]}""";
 	private static final String QUEUED =
 		" Returns immediately: blocks animate into place in the background, one queued build after another, while you keep working. "
 			+ "Each build's result (block count, anything that couldn't survive) is attached to a later tool result. Undoable.";
@@ -226,14 +240,14 @@ public class GameTools {
 		register("fill_region",
 			"Fill the box between two corners (inclusive) with one block state. Modes: solid (whole box), hollow (shell of "
 				+ "the block with air inside), outline (shell only, inside untouched), walls (four vertical sides only). "
-				+ "Optional replace limits changes to blocks matching that id (e.g. minecraft:grass_block) or exact state. "
-				+ "Use block minecraft:air to clear space. With replace, it waits for queued builds first so it sees them." + QUEUED,
+				+ "Optional replace only changes blocks matching it (e.g. minecraft:grass_block); it's shorthand for a mask. "
+				+ "Use block minecraft:air to clear space." + QUEUED,
 			"""
 				{"type":"object","properties":{
 				  "from":%s,"to":%s,
 				  "block":%s,
 				  "mode":{"type":"string","enum":["solid","hollow","outline","walls"]},
-				  "replace":{"type":"string","description":"Only replace blocks of this id/state."},
+				  "replace":{"type":"string","description":"Only replace blocks matching this (same syntax as mask)."},
 				  "duration_seconds":%s,
 				  "dimension":%s
 				},"required":["from","to","block"]}""".formatted(POS_SCHEMA, POS_SCHEMA, PATTERN_SCHEMA, DURATION_SCHEMA, DIM_SCHEMA),
@@ -255,19 +269,20 @@ public class GameTools {
 				+ "dome (top half of a sphere, center is the middle of its base), cylinder (center of the base, radius, height, "
 				+ "axis y/x/z; negative height extends the other way), cone and pyramid (center of the base, radius = base "
 				+ "half-width, height; negative height points down; a pyramid with height radius+1 has one-block steps), "
-				+ "torus (center, major radius, minor radius, axis of the hole), line (points: a polyline, radius 0 = thin). "
+				+ "torus (center, major radius, minor radius, axis of the hole), line (points: a polyline, radius 0 = thin), "
+				+ "curve (points: a smooth spline through every point, like WorldEdit //curve; for arches, cables, curved legs). "
 				+ "hollow draws only a 1-block shell and leaves the inside untouched; hollow cylinders, cones and pyramids "
 				+ "are open at the ends/base (tubes, roofs). Coordinates are block positions; radii may be decimals." + QUEUED,
 			"""
 				{"type":"object","properties":{
-				  "shape":{"type":"string","enum":["sphere","dome","cylinder","cone","pyramid","torus","line"]},
+				  "shape":{"type":"string","enum":["sphere","dome","cylinder","cone","pyramid","torus","line","curve"]},
 				  "center":%s,
 				  "radius":{"type":"number"},
 				  "radii":{"type":"array","items":{"type":"number"},"description":"sphere/dome only: [rx, ry, rz]."},
 				  "height":{"type":"integer","description":"cylinder, cone, pyramid. For cylinders along x or z, the length."},
 				  "minor_radius":{"type":"number","description":"torus tube radius (default 1)."},
 				  "axis":{"type":"string","enum":["y","x","z"],"description":"cylinder and torus orientation (default y)."},
-				  "points":{"type":"array","items":%s,"description":"line only: two or more points."},
+				  "points":{"type":"array","items":%s,"description":"line and curve: two or more points."},
 				  "hollow":{"type":"boolean"},
 				  "block":%s,
 				  "duration_seconds":%s,
@@ -311,6 +326,56 @@ public class GameTools {
 				  "dimension":%s
 				},"required":["from","to","dest"]}""".formatted(POS_SCHEMA, POS_SCHEMA, POS_SCHEMA, DURATION_SCHEMA, DIM_SCHEMA),
 			this::cloneRegion);
+
+		register("overlay",
+			"Cover the ground of a horizontal area, following the terrain like WorldEdit //overlay. Each column's ground is its "
+				+ "top solid block, ignoring leaves, plants and snow layers; columns topped by water, lava or a tree trunk are "
+				+ "skipped. mode above (default) places the block on top of the ground: snow, moss carpet, scattered flowers "
+				+ "(\"92%minecraft:air,8%minecraft:poppy\"). mode replace swaps the top depth blocks of the ground itself: a "
+				+ "minecraft:dirt_path or gravel road, a sandy clearing. Waits for queued builds first, so it sees them." + QUEUED,
+			"""
+				{"type":"object","properties":{
+				  "from":%s,"to":%s,
+				  "block":%s,
+				  "mode":{"type":"string","enum":["above","replace"]},
+				  "depth":{"type":"integer","description":"replace mode: how many ground blocks to replace (default 1)."},
+				  "duration_seconds":%s,
+				  "dimension":%s
+				},"required":["from","to","block"]}""".formatted(AREA_SCHEMA, AREA_SCHEMA, PATTERN_SCHEMA, DURATION_SCHEMA, DIM_SCHEMA),
+			args -> afterBuilds(() -> overlay(args)));
+
+		register("smooth_terrain",
+			"Smooth the ground's height over a horizontal area, like WorldEdit //smooth: bumps come down and dips fill in so "
+				+ "slopes become gentle and blend into the surrounding land. Each column keeps its own surface and filler blocks. "
+				+ "More iterations (default 2, max 10) give smoother ground. Trees and builds on changed ground aren't moved, so "
+				+ "clear them first or use a mask. Water columns are left alone. Good for prepping a build site or tidying "
+				+ "terrain after digging. Waits for queued builds first." + QUEUED,
+			"""
+				{"type":"object","properties":{
+				  "from":%s,"to":%s,
+				  "iterations":{"type":"integer"},
+				  "duration_seconds":%s,
+				  "dimension":%s
+				},"required":["from","to"]}""".formatted(AREA_SCHEMA, AREA_SCHEMA, DURATION_SCHEMA, DIM_SCHEMA),
+			args -> afterBuilds(() -> smoothTerrain(args)));
+
+		register("naturalize",
+			"Make the ground in a box look natural, like WorldEdit //naturalize. In each column, the topmost exposed natural "
+				+ "ground block becomes top (default minecraft:grass_block), the next depth blocks (default 3) become under "
+				+ "(default minecraft:dirt), and deeper ones become deep (default minecraft:stone). Only natural terrain changes "
+				+ "(dirt and grass types, stone types, sand, gravel); builds, ores and anything under water are left alone. "
+				+ "Use it after smoothing or reshaping terrain; top minecraft:sand with under minecraft:sandstone makes a beach. "
+				+ "Waits for queued builds first." + QUEUED,
+			"""
+				{"type":"object","properties":{
+				  "from":%s,"to":%s,
+				  "top":%s,"under":%s,"deep":%s,
+				  "depth":{"type":"integer"},
+				  "duration_seconds":%s,
+				  "dimension":%s
+				},"required":["from","to"]}""".formatted(POS_SCHEMA, POS_SCHEMA, PATTERN_SCHEMA, PATTERN_SCHEMA, PATTERN_SCHEMA,
+				DURATION_SCHEMA, DIM_SCHEMA),
+			args -> afterBuilds(() -> naturalize(args)));
 
 		register("wait_for_builds",
 			"Wait until every queued build has finished animating, then return their results. Call it before your final "
@@ -421,24 +486,15 @@ public class GameTools {
 		Pattern pattern(String s) throws ToolError {
 			List<BlockState> states = new ArrayList<>();
 			List<Double> weights = new ArrayList<>();
-			int depth = 0, start = 0;
-			for (int i = 0; i <= s.length(); i++) {
-				char c = i < s.length() ? s.charAt(i) : ',';
-				if (c == '[' || c == '{') depth++;
-				else if (c == ']' || c == '}') depth--;
-				else if (c == ',' && depth == 0) {
-					String part = s.substring(start, i).trim();
-					start = i + 1;
-					if (part.isEmpty()) continue;
-					var m = java.util.regex.Pattern.compile("^(\\d+(?:\\.\\d+)?)%\\s*(.+)$").matcher(part);
-					double w = 1;
-					if (m.matches()) {
-						w = Double.parseDouble(m.group(1));
-						part = m.group(2);
-					}
-					states.add(parse(part));
-					weights.add(w);
+			for (String part : splitTopLevel(s)) {
+				var m = java.util.regex.Pattern.compile("^(\\d+(?:\\.\\d+)?)%\\s*(.+)$").matcher(part);
+				double w = 1;
+				if (m.matches()) {
+					w = Double.parseDouble(m.group(1));
+					part = m.group(2);
 				}
+				states.add(parse(part));
+				weights.add(w);
 			}
 			if (states.isEmpty()) throw new ToolError("Empty block pattern");
 			double[] cum = new double[weights.size()];
@@ -458,11 +514,77 @@ public class GameTools {
 		}
 	}
 
+	/** Split on commas that aren't inside [...] or {...} (those belong to a block state or NBT). */
+	private static List<String> splitTopLevel(String s) {
+		List<String> parts = new ArrayList<>();
+		int depth = 0, start = 0;
+		for (int i = 0; i <= s.length(); i++) {
+			char c = i < s.length() ? s.charAt(i) : ',';
+			if (c == '[' || c == '{') depth++;
+			else if (c == ']' || c == '}') depth--;
+			else if (c == ',' && depth == 0) {
+				String part = s.substring(start, i).trim();
+				start = i + 1;
+				if (!part.isEmpty()) parts.add(part);
+			}
+		}
+		return parts;
+	}
+
+	/** The mask (and fill_region's replace) from a tool call, or null for none. See MASK_SCHEMA for the syntax. */
+	private static Predicate<BlockPos> mask(ServerLevel level, JsonObject args) throws ToolError {
+		Predicate<BlockPos> all = null;
+		for (String key : List.of("mask", "replace")) {
+			if (!args.has(key) || args.get(key).getAsString().isBlank()) continue;
+			for (String term : args.get(key).getAsString().trim().split("\\s+")) {
+				Predicate<BlockPos> t = maskTerm(level, term);
+				all = all == null ? t : all.and(t);
+			}
+		}
+		return all;
+	}
+
+	private static Predicate<BlockPos> maskTerm(ServerLevel level, String term) throws ToolError {
+		if (term.startsWith("!")) return maskTerm(level, term.substring(1)).negate();
+		if (term.startsWith(">")) {
+			Predicate<BlockPos> below = maskTerm(level, term.substring(1));
+			return p -> below.test(p.below());
+		}
+		if (term.startsWith("<")) {
+			Predicate<BlockPos> above = maskTerm(level, term.substring(1));
+			return p -> above.test(p.above());
+		}
+		switch (term) {
+			case "#existing": return p -> !level.getBlockState(p).isAir();
+			case "#solid": return p -> level.getBlockState(p).isSolid();
+			case "#liquid": return p -> level.getBlockState(p).liquid();
+			case "#surface": return p -> level.getBlockState(p).isSolid() && !level.getBlockState(p.above()).isSolid();
+			default: break;
+		}
+		// Block ids, #tags and partial states, parsed the way /execute if block does.
+		List<Predicate<BlockInWorld>> any = new ArrayList<>();
+		for (String part : splitTopLevel(term)) {
+			try {
+				StringReader reader = new StringReader(part);
+				any.add(BlockPredicateArgument.parse(level.holderLookup(Registries.BLOCK), reader));
+				if (reader.canRead()) throw new ToolError("Unexpected '" + reader.getRemaining() + "' in mask term '" + part + "'");
+			} catch (CommandSyntaxException e) {
+				throw new ToolError("Bad mask term '" + part + "': " + e.getMessage());
+			}
+		}
+		if (any.isEmpty()) throw new ToolError("Empty mask term");
+		return p -> {
+			BlockInWorld b = new BlockInWorld(level, p, true);
+			for (Predicate<BlockInWorld> m : any) if (m.test(b)) return true;
+			return false;
+		};
+	}
+
 	/** Queue a build and return right away; its result goes into {@link #reports} when it's done. */
-	private String queueBuild(ServerLevel level, Map<BlockPos, BlockState> changes, JsonObject args) {
+	private String queueBuild(ServerLevel level, Map<BlockPos, BlockState> changes, JsonObject args) throws ToolError {
 		int id = buildIds.incrementAndGet();
 		double secs = args.has("duration_seconds") ? args.get("duration_seconds").getAsDouble() : 0;
-		builds.enqueue(level, changes, undo, secs, r -> reports.add("Build #" + id + ": " + r));
+		builds.enqueue(level, changes, undo, secs, r -> reports.add("Build #" + id + ": " + r), mask(level, args));
 		return "Queued build #" + id + " (" + changes.size() + " blocks). Everything queued is done in about " + builds.secondsLeft()
 			+ "s. It's animating now; keep working.";
 	}
@@ -655,28 +777,13 @@ public class GameTools {
 		return queueBuild(level, changes, args);
 	}
 
-	private Object fillRegion(JsonObject args) throws ToolError {
-		// A replace filter reads the world, so let queued builds land first.
-		if (args.has("replace") && !args.get("replace").getAsString().isBlank()) return afterBuilds(() -> fillRegionNow(args));
-		return fillRegionNow(args);
-	}
-
-	private String fillRegionNow(JsonObject args) throws ToolError {
+	private String fillRegion(JsonObject args) throws ToolError {
 		ServerLevel level = level(args);
 		BlockPos a = pos(args, "from"), b = pos(args, "to");
 		BlockParser parser = new BlockParser(level);
 		Pattern state = parser.pattern(args.get("block").getAsString());
 		String mode = args.has("mode") ? args.get("mode").getAsString() : "solid";
-		BlockState air = net.minecraft.world.level.block.Blocks.AIR.defaultBlockState();
-
-		BlockState replaceState = null;
-		Block replaceBlock = null;
-		if (args.has("replace") && !args.get("replace").getAsString().isBlank()) {
-			String r = args.get("replace").getAsString();
-			BlockState rs = parser.parse(r);
-			if (r.contains("[")) replaceState = rs;
-			else replaceBlock = rs.getBlock();
-		}
+		BlockState air = Blocks.AIR.defaultBlockState();
 
 		int x0 = Math.min(a.getX(), b.getX()), x1 = Math.max(a.getX(), b.getX());
 		int y0 = Math.min(a.getY(), b.getY()), y1 = Math.max(a.getY(), b.getY());
@@ -697,12 +804,7 @@ public class GameTools {
 						default -> throw new ToolError("Unknown mode " + mode);
 					};
 					if (target == null) continue;
-					BlockPos p = new BlockPos(x, y, z);
-					if (replaceState != null || replaceBlock != null) {
-						BlockState cur = level.getBlockState(p);
-						if (replaceState != null ? cur != replaceState : !cur.is(replaceBlock)) continue;
-					}
-					changes.put(p, target);
+					changes.put(new BlockPos(x, y, z), target);
 				}
 			}
 		}
@@ -742,9 +844,9 @@ public class GameTools {
 		Pattern block = new BlockParser(level).pattern(args.get("block").getAsString());
 		boolean hollow = args.has("hollow") && args.get("hollow").getAsBoolean();
 		List<int[]> voxels;
-		if (shape.equals("line")) {
+		if (shape.equals("line") || shape.equals("curve")) {
 			if (!args.has("points") || !args.get("points").isJsonArray() || args.getAsJsonArray("points").isEmpty()) {
-				throw new ToolError("line needs points: [{x,y,z}, ...]");
+				throw new ToolError(shape + " needs points: [{x,y,z}, ...]");
 			}
 			List<int[]> pts = new ArrayList<>();
 			JsonObject wrap = new JsonObject();
@@ -753,7 +855,8 @@ public class GameTools {
 				BlockPos p = pos(wrap, "p");
 				pts.add(new int[]{p.getX(), p.getY(), p.getZ()});
 			}
-			voxels = Shapes.line(pts, Math.max(0, optDouble(args, "radius", 0)));
+			double radius = Math.max(0, optDouble(args, "radius", 0));
+			voxels = shape.equals("curve") ? Shapes.curve(pts, radius) : Shapes.line(pts, radius);
 		} else {
 			BlockPos c = pos(args, "center");
 			double r = optDouble(args, "radius", -1);
@@ -883,6 +986,134 @@ public class GameTools {
 		});
 	}
 
+	// ---------------------------------------------------------------- terrain tools
+
+	private static final int MAX_COLUMNS = 10_000;
+
+	/** Y of the top block in a column (solid or liquid, ignoring leaves). Loads the chunk if needed. */
+	private static int topY(ServerLevel level, int x, int z) {
+		// level.getHeight() reports the world floor for unloaded chunks, so load the chunk explicitly.
+		return level.getChunk(x >> 4, z >> 4).getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x & 15, z & 15);
+	}
+
+	private record Area(int x0, int z0, int x1, int z1) {
+		int w() { return x1 - x0 + 1; }
+		int d() { return z1 - z0 + 1; }
+	}
+
+	private static Area area(JsonObject args) throws ToolError {
+		if (!args.has("from") || !args.has("to")) throw new ToolError("from and to are required");
+		JsonObject f = args.getAsJsonObject("from"), t = args.getAsJsonObject("to");
+		Area a = new Area(Math.min(f.get("x").getAsInt(), t.get("x").getAsInt()), Math.min(f.get("z").getAsInt(), t.get("z").getAsInt()),
+			Math.max(f.get("x").getAsInt(), t.get("x").getAsInt()), Math.max(f.get("z").getAsInt(), t.get("z").getAsInt()));
+		if ((long) a.w() * a.d() > MAX_COLUMNS) throw new ToolError("Area too large (" + (long) a.w() * a.d() + " columns, max " + MAX_COLUMNS + ").");
+		return a;
+	}
+
+	private String overlay(JsonObject args) throws ToolError {
+		ServerLevel level = level(args);
+		Area a = area(args);
+		Pattern block = new BlockParser(level).pattern(args.get("block").getAsString());
+		String mode = args.has("mode") ? args.get("mode").getAsString() : "above";
+		if (!mode.equals("above") && !mode.equals("replace")) throw new ToolError("mode must be above or replace");
+		int depth = Math.max(1, Math.min(16, optInt(args, "depth", 1)));
+		LinkedHashMap<BlockPos, BlockState> changes = new LinkedHashMap<>();
+		int skipped = 0;
+		for (int z = a.z0(); z <= a.z1(); z++) for (int x = a.x0(); x <= a.x1(); x++) {
+			int y = topY(level, x, z);
+			BlockState top = level.getBlockState(new BlockPos(x, y, z));
+			if (top.liquid() || top.is(BlockTags.LOGS) || top.isAir()) {
+				skipped++;
+				continue;
+			}
+			if (mode.equals("above")) changes.put(new BlockPos(x, y + 1, z), block.pick());
+			else for (int k = 0; k < depth; k++) changes.put(new BlockPos(x, y - k, z), block.pick());
+		}
+		String out = queueBuild(level, changes, args);
+		return skipped > 0 ? out + " Skipped " + skipped + " column(s) topped by water, lava or a tree trunk." : out;
+	}
+
+	/** Ground height for smoothing: the top block, stepping down through tree trunks. */
+	private static int groundY(ServerLevel level, int x, int z) {
+		int y = topY(level, x, z);
+		BlockPos.MutableBlockPos mp = new BlockPos.MutableBlockPos(x, y, z);
+		while (y > level.getMinY() && level.getBlockState(mp.setY(y)).is(BlockTags.LOGS)) y--;
+		return y;
+	}
+
+	private String smoothTerrain(JsonObject args) throws ToolError {
+		ServerLevel level = level(args);
+		Area a = area(args);
+		int iterations = Math.max(1, Math.min(10, optInt(args, "iterations", 2)));
+		// One extra column all around, held fixed, so the edges blend into the land outside.
+		double[][] h = new double[a.d() + 2][a.w() + 2];
+		for (int j = 0; j < a.d() + 2; j++) for (int i = 0; i < a.w() + 2; i++) h[j][i] = groundY(level, a.x0() + i - 1, a.z0() + j - 1);
+		double[][] s = Shapes.smooth(h, iterations);
+
+		BlockState air = Blocks.AIR.defaultBlockState();
+		LinkedHashMap<BlockPos, BlockState> changes = new LinkedHashMap<>();
+		for (int j = 1; j <= a.d(); j++) for (int i = 1; i <= a.w(); i++) {
+			int x = a.x0() + i - 1, z = a.z0() + j - 1;
+			int old = (int) h[j][i], now = (int) Math.round(s[j][i]);
+			if (now == old) continue;
+			BlockState top = level.getBlockState(new BlockPos(x, old, z));
+			if (top.liquid() || top.isAir()) continue;
+			BlockState below = level.getBlockState(new BlockPos(x, old - 1, z));
+			BlockState filler = below.isSolid() ? below : top;
+			if (now > old) {
+				for (int y = old; y < now; y++) changes.put(new BlockPos(x, y, z), filler);
+			} else {
+				for (int y = now + 1; y <= old; y++) changes.put(new BlockPos(x, y, z), air);
+				BlockState plant = level.getBlockState(new BlockPos(x, old + 1, z));
+				if (!plant.isAir() && plant.canBeReplaced()) changes.put(new BlockPos(x, old + 1, z), air); // grass tufts would float
+			}
+			changes.put(new BlockPos(x, now, z), top);
+		}
+		checkSize(changes.size());
+		if (changes.isEmpty()) return "The ground there is already smooth; nothing to change.";
+		return queueBuild(level, changes, args);
+	}
+
+	private static boolean natural(BlockState st) {
+		return st.is(BlockTags.DIRT) || st.is(BlockTags.BASE_STONE_OVERWORLD) || st.is(BlockTags.SAND) || st.is(Blocks.GRAVEL);
+	}
+
+	private String naturalize(JsonObject args) throws ToolError {
+		ServerLevel level = level(args);
+		BlockPos a = pos(args, "from"), b = pos(args, "to");
+		BlockParser parser = new BlockParser(level);
+		Pattern top = parser.pattern(args.has("top") ? args.get("top").getAsString() : "minecraft:grass_block");
+		Pattern under = parser.pattern(args.has("under") ? args.get("under").getAsString() : "minecraft:dirt");
+		Pattern deep = parser.pattern(args.has("deep") ? args.get("deep").getAsString() : "minecraft:stone");
+		int layers = Math.max(0, Math.min(16, optInt(args, "depth", 3)));
+		int x0 = Math.min(a.getX(), b.getX()), x1 = Math.max(a.getX(), b.getX());
+		int y0 = Math.max(level.getMinY(), Math.min(a.getY(), b.getY())), y1 = Math.min(level.getMaxY(), Math.max(a.getY(), b.getY()));
+		int z0 = Math.min(a.getZ(), b.getZ()), z1 = Math.max(a.getZ(), b.getZ());
+		checkSize((long) (x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1));
+
+		LinkedHashMap<BlockPos, BlockState> changes = new LinkedHashMap<>();
+		BlockPos.MutableBlockPos mp = new BlockPos.MutableBlockPos();
+		for (int z = z0; z <= z1; z++) for (int x = x0; x <= x1; x++) {
+			// Start above the box so a box whose top is underground still knows how deep it is.
+			int depth = 0;
+			boolean wet = false;
+			for (int y = Math.min(level.getMaxY(), y1 + layers + 1); y >= y0; y--) {
+				BlockState st = level.getBlockState(mp.set(x, y, z));
+				if (st.liquid()) { wet = true; continue; }
+				if (!st.isSolid()) { // air, plants, snow layers: the next solid block is exposed
+					depth = 0;
+					if (st.isAir()) wet = false;
+					continue;
+				}
+				depth++;
+				if (y > y1 || wet || !natural(st)) continue;
+				Pattern p = depth == 1 ? top : depth <= 1 + layers ? under : deep;
+				changes.put(new BlockPos(x, y, z), p.pick());
+			}
+		}
+		return queueBuild(level, changes, args);
+	}
+
 	/** Must be called on the server thread. Waits for queued builds, then completes once the (animated) revert has finished. */
 	public CompletableFuture<String> undo(int steps) {
 		return afterBuilds(() -> undoNow(steps));
@@ -895,7 +1126,7 @@ public class GameTools {
 		for (UndoHistory.Entry entry : entries) {
 			for (var dimEntry : entry.originals.entrySet()) {
 				ServerLevel lvl = server.getLevel(dimEntry.getKey());
-				if (lvl != null) parts.add(builds.enqueue(lvl, dimEntry.getValue(), null, 0, null));
+				if (lvl != null) parts.add(builds.enqueue(lvl, dimEntry.getValue(), null, 0, null, null));
 			}
 		}
 		int n = entries.size();
@@ -985,8 +1216,7 @@ public class GameTools {
 			StringBuilder hRow = new StringBuilder();
 			StringBuilder bRow = new StringBuilder();
 			for (int x = x0; x <= x1; x += step) {
-				// level.getHeight() reports the world floor for unloaded chunks, so load the chunk explicitly.
-				int top = level.getChunk(x >> 4, z >> 4).getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x & 15, z & 15);
+				int top = topY(level, x, z);
 				min = Math.min(min, top);
 				max = Math.max(max, top);
 				BlockState st = level.getBlockState(mp.set(x, top, z));
