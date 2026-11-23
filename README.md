@@ -35,18 +35,21 @@ Claude's replies ◄── stream-json ◄─┘
 | `view_build` | Rendered picture of an area (isometric from any of four corners, or top-down) so Claude can see how its build looks |
 | `wait_for_builds` | Wait for queued builds to finish and get their results |
 | `define_item` | Invent a custom item: a voxel model (pixel art or 3D) plus behavior (damage, food, durability, right-click commands...) that every player sees instantly |
-| `give_item` | Give a player a custom item |
-| `view_item` | Picture of a custom item's model |
+| `define_block` | Invent a custom block: a painted cube like a vanilla block, or a small voxel shape, with light, hardness, sound, collision and right-click commands |
+| `give_item` | Give a player a custom item or block |
+| `view_item` | Picture of a custom item's or block's model |
 | `run_commands` | Any command, run as the requesting player (`@s`, `~`), at a capped permission level |
 | `undo` | Revert the last turn's block changes |
 
 Any `block` argument, and blueprint palette entries, can be a WorldEdit-style random mix such as `70%stone_bricks,30%mossy_stone_bricks`. Every placement tool also takes a WorldEdit-style `mask` that limits which blocks it may change, such as `minecraft:air` (never overwrite anything), `#minecraft:logs`, or `!#existing >#solid` (air resting on solid ground). Masks are checked as each block goes down.
 
-### Custom items
+### Custom items and blocks
 
 Claude can invent items that don't exist in Minecraft and hand them out on the spot: a frost sword, a healing berry, a teleport wand. Each one is a voxel model Claude designs (16x16 pixel art like vanilla items, or a small 3D model) plus behavior: melee damage, food, durability, stack size, glint, rarity, and commands that run on right-click. Definitions are saved with the world and sent to every player as soon as they're made, so new items appear instantly with no resource pack or restart.
 
-Under the hood there's one registered item, `claudecraft:custom_item`, and each stack names its definition in a `claudecraft:definition` component, because Minecraft can't register new items while it runs. You can also give one with `/give @s claudecraft:custom_item[claudecraft:definition="ruby"]`, though `give_item` also applies the item's behavior.
+Custom blocks work the same way: Claude paints a cube's faces like a vanilla 16x16 texture, or sculpts a smaller shape (a lamp, a crystal), and sets its light, hardness, sound, collision and right-click commands. They're drawn straight into the world's chunk meshes like vanilla blocks, and Claude can use them anywhere in its building tools as `custom:<id>`. Redefining a block redraws every copy already placed.
+
+Under the hood there's one registered item, `claudecraft:custom_item`, and each stack names its definition in a `claudecraft:definition` component, because Minecraft can't register new items while it runs. You can also give one with `/give @s claudecraft:custom_item[claudecraft:definition="ruby"]`, though `give_item` also applies the item's behavior. Blocks are one registered block, `claudecraft:custom_block`, with a numbered `variant` state per design (up to 256 per world).
 
 ### Builds you can watch
 

@@ -5,10 +5,26 @@ import com.google.gson.JsonParser;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
+import dev.claudecraft.CustomBlocks;
 import dev.claudecraft.CustomItems;
 import dev.claudecraft.VoxelModel;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.model.loading.v1.ModelLoadingPlugin;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.fabricmc.fabric.api.client.renderer.v1.mesh.MutableQuadView;
+import net.fabricmc.fabric.api.client.renderer.v1.mesh.QuadEmitter;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.block.BlockAndTintGetter;
+import net.minecraft.client.renderer.block.dispatch.BlockStateModel;
+import net.minecraft.client.renderer.block.dispatch.BlockStateModelPart;
+import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
+import net.minecraft.client.resources.model.ModelBaker;
+import net.minecraft.client.resources.model.ResolvableModel;
+import net.minecraft.client.resources.model.sprite.Material;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.renderer.item.properties.select.SelectItemModelProperties;
@@ -28,11 +44,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 /**
- * Client half of custom items: receives definitions from the server and draws each item's voxel model. The
- * item's model file (assets/claudecraft/items/custom_item.json) picks how it's held from the definition's style,
- * then hands drawing to the "claudecraft:voxel" special renderer below.
+ * Client half of custom items and blocks: receives definitions from the server and draws their voxel models.
+ * Items: the item model files (assets/claudecraft/items/) pick how it's held from the definition's style, then
+ * hand drawing to the "claudecraft:voxel" special renderer below. Blocks: every custom_block state gets a model
+ * that emits its definition's quads straight into the chunk mesh, so placed blocks cost what vanilla blocks do.
  */
 public class ClaudeCraftClient implements ClientModInitializer {
 	private static final Identifier WHITE = Identifier.fromNamespaceAndPath("claudecraft", "textures/item/white.png");
@@ -57,18 +75,35 @@ public class ClaudeCraftClient implements ClientModInitializer {
 
 	/** Meshes by definition id, built the first time an item is drawn and dropped when definitions change. */
 	private static final Map<String, Mesh> MESHES = new ConcurrentHashMap<>();
+	/** Placed-block quads by definition id (sitting on the floor, unscaled). Read from chunk-building threads. */
+	private static final Map<String, List<VoxelModel.Quad>> BLOCK_MESHES = new ConcurrentHashMap<>();
+	private static final List<VoxelModel.Quad> MISSING_BLOCK = missingModel().mesh(true);
 
 	@Override
 	public void onInitializeClient() {
 		SpecialModelRenderers.ID_MAPPER.put(Identifier.fromNamespaceAndPath("claudecraft", "voxel"), VoxelRenderer.Unbaked.MAP_CODEC);
 		SelectItemModelProperties.ID_MAPPER.put(Identifier.fromNamespaceAndPath("claudecraft", "style"), StyleProperty.TYPE);
-		CustomItems.onClientChange = MESHES::clear;
+		CustomItems.onClientChange = blocks -> {
+			MESHES.clear();
+			BLOCK_MESHES.clear();
+			Minecraft mc = Minecraft.getInstance();
+			if (blocks && mc.level != null && mc.levelRenderer.viewArea() != null) {
+				// Rebuild every loaded section so placed blocks pick up the new designs.
+				var area = mc.levelRenderer.viewArea();
+				var cam = area.getCameraSectionPos();
+				int d = area.getViewDistance();
+				mc.level.setSectionRangeDirty(cam.x() - d, area.minSectionY(), cam.z() - d, cam.x() + d, area.maxSectionY(), cam.z() + d);
+			}
+		};
+		ModelLoadingPlugin.register(ctx -> ctx.registerBlockStateResolver(CustomBlocks.BLOCK, resolver -> {
+			for (BlockState st : CustomBlocks.BLOCK.getStateDefinition().getPossibleStates()) resolver.setModel(st, new VoxelBlockModel.Unbaked());
+		}));
 		ClientPlayNetworking.registerGlobalReceiver(CustomItems.DefinitionsPayload.TYPE, (payload, ctx) -> CustomItems.receive(payload));
 	}
 
 	record Mesh(List<VoxelModel.Quad> opaque, List<VoxelModel.Quad> translucent) {
 		static Mesh of(VoxelModel m) {
-			List<VoxelModel.Quad> all = m.mesh();
+			List<VoxelModel.Quad> all = m.mesh(false);
 			return new Mesh(all.stream().filter(q -> !q.translucent()).toList(), all.stream().filter(VoxelModel.Quad::translucent).toList());
 		}
 	}
@@ -116,7 +151,8 @@ public class ClaudeCraftClient implements ClientModInitializer {
 
 		@Override
 		public String extractArgument(ItemStack stack) {
-			return stack.get(CustomItems.DEFINITION);
+			JsonObject def = CustomItems.definition(stack); // block drops name their definition only by variant
+			return def != null ? def.get("id").getAsString() : stack.get(CustomItems.DEFINITION);
 		}
 
 		record Unbaked() implements SpecialModelRenderer.Unbaked<String> {
@@ -153,6 +189,76 @@ public class ClaudeCraftClient implements ClientModInitializer {
 		@Override
 		public SelectItemModelProperty.Type<StyleProperty, String> type() {
 			return TYPE;
+		}
+	}
+
+	private static List<VoxelModel.Quad> blockMesh(String id) {
+		JsonObject def = id == null ? null : CustomItems.DEFS.get(id);
+		if (def == null) return MISSING_BLOCK;
+		return BLOCK_MESHES.computeIfAbsent(id, k -> {
+			try {
+				return VoxelModel.parse(def.getAsJsonObject("model")).mesh(true);
+			} catch (RuntimeException e) {
+				return MISSING_BLOCK;
+			}
+		});
+	}
+
+	/** Model for one custom_block state: looks up its variant's definition each time a chunk is built. */
+	static final class VoxelBlockModel implements BlockStateModel {
+		private static final Direction[] DIRS = {Direction.EAST, Direction.WEST, Direction.UP, Direction.DOWN, Direction.SOUTH, Direction.NORTH};
+		private static final float[] U = {0, 1, 1, 0}, V = {1, 1, 0, 0};
+		private final int variant;
+		private final Material.Baked white;
+
+		VoxelBlockModel(int variant, Material.Baked white) {
+			this.variant = variant;
+			this.white = white;
+		}
+
+		@Override
+		public void emitQuads(QuadEmitter e, BlockAndTintGetter level, BlockPos pos, BlockState state, RandomSource random, Predicate<Direction> cullTest) {
+			for (VoxelModel.Quad q : blockMesh(CustomBlocks.idForSlot(variant))) {
+				if (q.boundary() >= 0 && cullTest.test(DIRS[q.boundary()])) continue; // hidden by the neighboring block
+				float[] c = q.corners();
+				for (int k = 0; k < 4; k++) e.pos(k, c[k * 3], c[k * 3 + 1], c[k * 3 + 2]).color(k, q.argb()).uv(k, U[k], V[k]);
+				e.materialBake(white, MutableQuadView.BAKE_NORMALIZED);
+				e.nominalFace(DIRS[q.face()]);
+				e.chunkLayer(q.translucent() ? ChunkSectionLayer.TRANSLUCENT : ChunkSectionLayer.SOLID);
+				e.emit();
+			}
+		}
+
+		@Override
+		public void collectParts(RandomSource random, List<BlockStateModelPart> parts) {
+			// Everything is emitted by emitQuads.
+		}
+
+		@Override
+		public Material.Baked particleMaterial() {
+			return white;
+		}
+
+		@Override
+		public int materialFlags() {
+			return 0;
+		}
+
+		record Unbaked() implements BlockStateModel.UnbakedRoot {
+			@Override
+			public BlockStateModel bake(BlockState state, ModelBaker baker) {
+				Material.Baked white = baker.materials().get(new Material(Identifier.fromNamespaceAndPath("claudecraft", "block/white")), () -> "claudecraft:custom_block");
+				return new VoxelBlockModel(state.getValue(CustomBlocks.VARIANT), white);
+			}
+
+			@Override
+			public Object visualEqualityGroup(BlockState state) {
+				return state.getValue(CustomBlocks.VARIANT); // light doesn't change how it looks
+			}
+
+			@Override
+			public void resolveDependencies(ResolvableModel.Resolver resolver) {
+			}
 		}
 	}
 }

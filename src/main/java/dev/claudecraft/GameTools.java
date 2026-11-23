@@ -453,8 +453,38 @@ public class GameTools {
 				},"required":["id","name","palette"]}""",
 			this::defineItem);
 
+		register("define_block",
+			"Create a custom block, or update one by reusing its id. Every player sees it right away. Either paint a full "
+				+ "cube like a vanilla block with faces (16 rows of 16 characters per face, seen from outside with up toward the "
+				+ "sky; give all, or side plus top and bottom, or individual north/south/east/west/top/bottom), or sculpt any "
+				+ "shape in layers (place_blueprint format, at most 16 voxels per side; 16 fills the block, smaller models sit "
+				+ "on the floor centered, e.g. a lamp, a statue, a crystal cluster). palette maps characters to #RRGGBB or "
+				+ "#AARRGGBB colors (alpha below FF is see-through, like glass). Place it with any placement tool as "
+				+ "custom:<id> (patterns and masks too), or give it with give_item. properties: light (0 to 15), hardness "
+				+ "(seconds-ish to mine; 1.5 is stone, 0 instant, -1 unbreakable), sound, collision (model: the voxel shape, "
+				+ "full, or none to walk through), and use_commands that run when a player right-clicks it, as that player but "
+				+ "at the block (~ ~ ~ is the block). Updating changes the look, shape, sound and commands of blocks already "
+				+ "placed; light applies to blocks placed afterwards. Up to " + CustomBlocks.SLOTS + " block designs per world.",
+			"""
+				{"type":"object","properties":{
+				  "id":{"type":"string","description":"Lowercase letters, digits and underscores, e.g. ruby_ore."},
+				  "name":{"type":"string"},
+				  "description":{"type":"string"},
+				  "palette":{"type":"object","additionalProperties":{"type":"string"}},
+				  "faces":{"type":"object","additionalProperties":{"type":"array","items":{"type":"string"}}},
+				  "layers":{"type":"array","items":{"type":"array","items":{"type":"string"}}},
+				  "properties":{"type":"object","properties":{
+				    "light":{"type":"integer"},
+				    "hardness":{"type":"number"},
+				    "sound":{"type":"string","enum":%s},
+				    "collision":{"type":"string","enum":["model","full","none"]},
+				    "use_commands":{"type":"array","items":{"type":"string"}}
+				  }}
+				},"required":["id","name","palette"]}""".formatted(new com.google.gson.Gson().toJson(CustomBlocks.SOUNDS)),
+			this::defineBlock);
+
 		register("give_item",
-			"Give a player copies of a custom item made with define_item.",
+			"Give a player copies of a custom item or block made with define_item or define_block.",
 			"""
 				{"type":"object","properties":{
 				  "id":{"type":"string"},
@@ -464,7 +494,7 @@ public class GameTools {
 			this::giveItem);
 
 		register("view_item",
-			"See a picture of a custom item's voxel model, drawn like view_build (flat-shaded cubes, see-through colors shown "
+			"See a picture of a custom item's or block's voxel model, drawn like view_build (flat-shaded cubes, see-through colors shown "
 				+ "solid). Use it to check a new design before giving it out.",
 			"""
 				{"type":"object","properties":{
@@ -562,6 +592,13 @@ public class GameTools {
 			BlockState cached = cache.get(s);
 			if (cached != null) return cached;
 			String norm = s.trim();
+			if (norm.startsWith("custom:")) {
+				JsonObject def = CustomItems.DEFS.get(norm.substring("custom:".length()));
+				if (!CustomBlocks.isBlock(def)) throw new ToolError("No custom block " + norm + " (make one with define_block)");
+				BlockState st = CustomBlocks.state(def);
+				cache.put(s, st);
+				return st;
+			}
 			try {
 				BlockState st = BlockStateParser.parseForBlock(lookup, norm, false).blockState();
 				cache.put(s, st);
@@ -723,7 +760,7 @@ public class GameTools {
 			sb.append(String.format(Locale.ROOT, "Facing: %s (yaw %.0f, pitch %.0f)%n", p.getDirection().getSerializedName(), p.getYRot(), p.getXRot()));
 			HitResult hit = p.pick(64, 1.0f, false);
 			if (hit instanceof BlockHitResult bh && hit.getType() == HitResult.Type.BLOCK) {
-				sb.append("Looking at: ").append(BlockStateParser.serialize(level.getBlockState(bh.getBlockPos())))
+				sb.append("Looking at: ").append(blockName(level.getBlockState(bh.getBlockPos()), false))
 					.append(" at ").append(fmt(bh.getBlockPos())).append(" (").append(bh.getDirection().getSerializedName()).append(" face)\n");
 			} else {
 				sb.append("Looking at: nothing within 64 blocks\n");
@@ -1281,10 +1318,61 @@ public class GameTools {
 		def.addProperty("style", style);
 		def.add("model", model);
 		def.add("properties", props);
+		if (CustomBlocks.isBlock(CustomItems.DEFS.get(id))) throw new ToolError(id + " is already a custom block; pick another id");
 		boolean existed = CustomItems.DEFS.containsKey(id);
 		CustomItems.define(server, def);
 		return (existed ? "Updated" : "Defined") + " custom item " + id + " (" + parsed.sx + "x" + parsed.sy + "x" + parsed.sz
 			+ " voxels). Hand it out with give_item, or check it with view_item.";
+	}
+
+	private String defineBlock(JsonObject args) throws ToolError {
+		String id = args.has("id") ? args.get("id").getAsString() : "";
+		if (!id.matches("[a-z0-9_]{1,40}")) throw new ToolError("id must be 1 to 40 lowercase letters, digits or underscores");
+		JsonObject old = CustomItems.DEFS.get(id);
+		if (old != null && !CustomBlocks.isBlock(old)) throw new ToolError(id + " is already a custom item; pick another id");
+		JsonObject model = new JsonObject();
+		model.add("palette", args.get("palette"));
+		if (args.has("faces")) model.add("faces", args.get("faces"));
+		else if (args.has("layers")) model.add("layers", args.get("layers"));
+		else throw new ToolError("Give the block as faces (a painted cube) or layers (a voxel shape)");
+		VoxelModel parsed;
+		try {
+			parsed = VoxelModel.parse(model);
+		} catch (IllegalArgumentException | IllegalStateException | ClassCastException e) {
+			throw new ToolError("Bad model: " + e.getMessage());
+		}
+		if (parsed.sx > 16 || parsed.sy > 16 || parsed.sz > 16) throw new ToolError("Blocks are at most 16 voxels per side");
+		JsonObject props = args.has("properties") ? args.getAsJsonObject("properties") : new JsonObject();
+		if (props.has("sound") && !CustomBlocks.SOUNDS.contains(props.get("sound").getAsString())) {
+			throw new ToolError("sound must be one of " + String.join(", ", CustomBlocks.SOUNDS));
+		}
+		if (props.has("collision") && !List.of("model", "full", "none").contains(props.get("collision").getAsString())) {
+			throw new ToolError("collision must be model, full or none");
+		}
+		int slot = CustomBlocks.allocateSlot(id);
+		if (slot < 0) throw new ToolError("This world already has " + CustomBlocks.SLOTS + " custom blocks; redefine an existing one instead");
+
+		JsonObject def = new JsonObject();
+		def.addProperty("id", id);
+		def.addProperty("kind", "block");
+		def.addProperty("slot", slot);
+		def.addProperty("name", args.get("name").getAsString());
+		if (args.has("description")) def.addProperty("description", args.get("description").getAsString());
+		def.addProperty("style", "block");
+		def.add("model", model);
+		def.add("properties", props);
+		CustomItems.define(server, def);
+		return (old != null ? "Updated" : "Defined") + " custom block " + id + ". Place it as custom:" + id
+			+ " with any placement tool, or give it with give_item.";
+	}
+
+	/** How Claude names a block state: custom:<id> for custom blocks, the usual id[properties] otherwise. */
+	static String blockName(BlockState st, boolean idsOnly) {
+		if (st.is(CustomBlocks.BLOCK)) {
+			String id = CustomBlocks.idForSlot(st.getValue(CustomBlocks.VARIANT));
+			return id == null ? "custom:unknown" : "custom:" + id;
+		}
+		return idsOnly ? BuiltInRegistries.BLOCK.getKey(st.getBlock()).toString() : BlockStateParser.serialize(st);
 	}
 
 	private JsonObject itemDef(JsonObject args) throws ToolError {
@@ -1360,17 +1448,30 @@ public class GameTools {
 		// Read the blocks on the server thread once builds are done; draw the pictures off it.
 		return builds.idle().thenApplyAsync(v -> {
 			int[] colors = new int[(int) volume];
+			Map<Integer, Integer> customColors = new HashMap<>();
 			BlockPos.MutableBlockPos mp = new BlockPos.MutableBlockPos();
 			for (int y = 0; y < sy; y++) for (int z = 0; z < sz; z++) for (int x = 0; x < sx; x++) {
 				mp.set(x0 + x, y0 + y, z0 + z);
 				BlockState st = level.getBlockState(mp);
 				if (st.isAir() || (!st.liquid() && st.getCollisionShape(level, mp).isEmpty())) continue;
-				int rgb = st.getMapColor(level, mp).col;
+				int rgb = st.is(CustomBlocks.BLOCK) ? customColors.computeIfAbsent(st.getValue(CustomBlocks.VARIANT), GameTools::customBlockColor)
+					: st.getMapColor(level, mp).col;
 				if (rgb != 0) colors[(y * sz + z) * sx + x] = rgb;
 			}
 			return new Renderer.Snapshot(colors, sx, sy, sz);
 		}, server).thenApplyAsync(snap -> render(snap, views,
 			"Box x " + x0 + ".." + (x0 + sx - 1) + ", y " + y0 + ".." + y1 + ", z " + z0 + ".." + (z0 + sz - 1) + "."));
+	}
+
+	/** A custom block's color in pictures: the average of its model's colors. */
+	private static int customBlockColor(int slot) {
+		String id = CustomBlocks.idForSlot(slot);
+		JsonObject def = id == null ? null : CustomItems.DEFS.get(id);
+		try {
+			return def == null ? 0x808080 : VoxelModel.parse(def.getAsJsonObject("model")).averageColor() & 0xFFFFFF;
+		} catch (RuntimeException e) {
+			return 0x808080;
+		}
 	}
 
 	private static Renderer.View view(String name) throws ToolError {
@@ -1409,7 +1510,7 @@ public class GameTools {
 						continue;
 					}
 					allAir = false;
-					String key = idsOnly ? BuiltInRegistries.BLOCK.getKey(st.getBlock()).toString() : BlockStateParser.serialize(st);
+					String key = blockName(st, idsOnly);
 					row.append(palette.computeIfAbsent(key, k -> paletteChar(palette.size())));
 				}
 				layer.append("  ").append(row).append('\n');
@@ -1453,7 +1554,7 @@ public class GameTools {
 				min = Math.min(min, top);
 				max = Math.max(max, top);
 				BlockState st = level.getBlockState(mp.set(x, top, z));
-				String key = BuiltInRegistries.BLOCK.getKey(st.getBlock()).toString();
+				String key = blockName(st, true);
 				if (hRow.length() > 0) hRow.append(' ');
 				hRow.append(top);
 				bRow.append(palette.computeIfAbsent(key, k -> paletteChar(palette.size())));

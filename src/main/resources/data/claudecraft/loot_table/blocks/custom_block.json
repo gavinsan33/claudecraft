@@ -1,0 +1,19 @@
+{
+  "type": "minecraft:block",
+  "pools": [
+    {
+      "condition": { "type": "minecraft:survives_explosion" },
+      "entries": [
+        {
+          "type": "minecraft:item",
+          "name": "claudecraft:custom_block",
+          "modifier": [
+            { "type": "minecraft:copy_state", "block": "claudecraft:custom_block", "properties": ["variant", "light"] }
+          ]
+        }
+      ],
+      "rolls": 1
+    }
+  ],
+  "random_sequence": "claudecraft:blocks/custom_block"
+}

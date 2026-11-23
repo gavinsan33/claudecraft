@@ -75,12 +75,15 @@ public final class CustomItems {
 	 * shared map because in singleplayer both sides run in one process and hold the same data anyway.
 	 */
 	public static final Map<String, JsonObject> DEFS = new ConcurrentHashMap<>();
-	/** Called on the client thread whenever definitions change, so the client can drop cached meshes. */
-	public static volatile Runnable onClientChange = () -> {};
+	/**
+	 * Called on the client thread whenever definitions change, so the client can drop cached meshes. The argument
+	 * says whether any block definitions changed (placed blocks then need redrawing).
+	 */
+	public static volatile java.util.function.Consumer<Boolean> onClientChange = blocks -> {};
 
 	private static Path saveFile;
 
-	/** Sent to clients: a JSON array of definitions, either everything (replace) or just the changed ones. */
+	/** Sent to clients: a JSON array of item and block definitions, either everything (replace) or just the changed ones. */
 	public record DefinitionsPayload(String json, boolean replaceAll) implements CustomPacketPayload {
 		public static final Type<DefinitionsPayload> TYPE = new Type<>(id("item_definitions"));
 		public static final StreamCodec<RegistryFriendlyByteBuf, DefinitionsPayload> CODEC = StreamCodec.composite(
@@ -104,13 +107,14 @@ public final class CustomItems {
 			DataComponentType.<String>builder().persistent(Codec.STRING).networkSynchronized(ByteBufCodecs.STRING_UTF8).build());
 		ResourceKey<Item> key = ResourceKey.create(Registries.ITEM, id("custom_item"));
 		ITEM = Registry.register(BuiltInRegistries.ITEM, key, new CustomItem(new Item.Properties().setId(key)));
+		CustomBlocks.register();
 		PayloadTypeRegistry.clientboundPlay().registerLarge(DefinitionsPayload.TYPE, DefinitionsPayload.CODEC, MAX_PAYLOAD);
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> sender.sendPacket(payload(DEFS.values(), true)));
 	}
 
 	/** Load this world's definitions. Server thread, at startup. */
 	static void load(MinecraftServer server) {
-		saveFile = server.getWorldPath(LevelResource.ROOT).resolve("claudecraft").resolve("items.json");
+		saveFile = server.getWorldPath(LevelResource.ROOT).resolve("claudecraft").resolve("definitions.json");
 		DEFS.clear();
 		try {
 			if (Files.exists(saveFile)) {
@@ -121,11 +125,13 @@ public final class CustomItems {
 		} catch (Exception e) {
 			ClaudeCraft.LOGGER.error("Couldn't read custom item definitions from {}", saveFile, e);
 		}
+		CustomBlocks.definitionsChanged();
 	}
 
 	/** Add or replace a definition, save it, and send it to everyone online. Server thread. */
 	static void define(MinecraftServer server, JsonObject def) {
 		DEFS.put(def.get("id").getAsString(), def);
+		CustomBlocks.definitionsChanged();
 		JsonObject all = new JsonObject();
 		DEFS.forEach(all::add);
 		try {
@@ -147,18 +153,28 @@ public final class CustomItems {
 	/** Apply a payload on the client. */
 	public static void receive(DefinitionsPayload p) {
 		java.util.Set<String> ids = new java.util.HashSet<>();
+		boolean blocks = p.replaceAll();
 		for (JsonElement e : JsonParser.parseString(p.json()).getAsJsonArray()) {
 			JsonObject def = e.getAsJsonObject();
 			ids.add(def.get("id").getAsString());
 			DEFS.put(def.get("id").getAsString(), def);
+			blocks |= CustomBlocks.isBlock(def);
 		}
 		// Not clear() first: in singleplayer the server reads this same map from its own thread.
 		if (p.replaceAll()) DEFS.keySet().retainAll(ids);
-		onClientChange.run();
+		CustomBlocks.definitionsChanged();
+		onClientChange.accept(blocks);
 	}
 
+	/** The definition behind a custom item or custom block item stack, or null. */
 	public static JsonObject definition(ItemStack stack) {
 		String id = stack.get(DEFINITION);
+		if (id == null && stack.getItem() == CustomBlocks.ITEM) {
+			// Block drops carry only their block state (variant), not the definition id.
+			var state = stack.get(net.minecraft.core.component.DataComponents.BLOCK_STATE);
+			String variant = state == null ? null : state.properties().get("variant");
+			if (variant != null) id = CustomBlocks.idForSlot(Integer.parseInt(variant));
+		}
 		return id == null ? null : DEFS.get(id);
 	}
 
@@ -175,6 +191,7 @@ public final class CustomItems {
 
 	/** A stack of a defined item with its behavior components (stack size, food, damage, durability...). */
 	static ItemStack stack(JsonObject def, int count) {
+		if (CustomBlocks.isBlock(def)) return CustomBlocks.stack(def, count);
 		String id = def.get("id").getAsString();
 		JsonObject p = props(def);
 		ItemStack s = new ItemStack(ITEM);

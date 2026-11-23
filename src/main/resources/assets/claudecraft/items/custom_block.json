@@ -1,0 +1,3 @@
+{
+  "model": { "type": "minecraft:special", "base": "claudecraft:item/voxel_block", "model": { "type": "claudecraft:voxel" } }
+}
