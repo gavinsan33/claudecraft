@@ -104,3 +104,5 @@ The mod looks for `claude` on `PATH`, in `~/.local/bin` and in `~/.claude/local`
 `./gradlew runServer` starts a dev server. Typing `claude ask build a tower at 0 ~ 0` in its console exercises the whole pipeline with no client needed. The JDK 25 toolchain is downloaded automatically if your system Java has no compiler.
 
 `java src/main/java/dev/claudecraft/Shapes.java` (likewise `Renderer.java`) runs a quick self-check of the shape math or the build renderer.
+
+`xvfb-run -a ./gradlew runClientGameTest` (with `WAYLAND_DISPLAY` unset, so the game uses the virtual display) launches the real game headless, defines a few custom items, checks their names and right-click commands, and saves screenshots to `build/run/clientGameTest/screenshots`.
