@@ -35,6 +35,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -48,7 +50,8 @@ public class GameTools {
 
 	@FunctionalInterface
 	interface Handler {
-		String run(JsonObject args) throws Exception;
+		/** Returns a String, or a CompletableFuture<String> for work that finishes over later ticks. */
+		Object run(JsonObject args) throws Exception;
 	}
 
 	record Tool(String name, String description, JsonObject schema, Handler handler) {}
@@ -56,14 +59,16 @@ public class GameTools {
 	private final MinecraftServer server;
 	private final Config cfg;
 	private final UndoHistory undo;
+	private final BuildQueue builds;
 	private final Map<String, Tool> tools = new LinkedHashMap<>();
 	/** Name of the player whose message Claude is currently handling. */
 	private volatile String defaultPlayer;
 
-	public GameTools(MinecraftServer server, Config cfg, UndoHistory undo) {
+	public GameTools(MinecraftServer server, Config cfg, UndoHistory undo, BuildQueue builds) {
 		this.server = server;
 		this.cfg = cfg;
 		this.undo = undo;
+		this.builds = builds;
 		registerAll();
 	}
 
@@ -98,7 +103,7 @@ public class GameTools {
 			error = true;
 		} else {
 			try {
-				text = server.submit(() -> {
+				Object result = server.submit(() -> {
 					try {
 						return tool.handler().run(args);
 					} catch (RuntimeException e) {
@@ -107,8 +112,11 @@ public class GameTools {
 						throw new WrappedException(e);
 					}
 				}).get(120, TimeUnit.SECONDS);
+				// Animated builds complete on a later tick; wait here (off the server thread) until they're done.
+				text = result instanceof CompletableFuture<?> f ? (String) f.get(30, TimeUnit.MINUTES) : (String) result;
 			} catch (ExecutionException e) {
 				Throwable cause = e.getCause() instanceof WrappedException w ? w.getCause() : e.getCause();
+				if (cause instanceof CompletionException ce && ce.getCause() != null) cause = ce.getCause();
 				error = true;
 				if (cause instanceof ToolError || cause instanceof CommandSyntaxException) {
 					text = "Error: " + cause.getMessage();
@@ -179,7 +187,8 @@ public class GameTools {
 				+ "(e.g. \"s\":\"minecraft:stone_bricks\", \"D\":\"minecraft:oak_door[facing=north,half=lower]\"). "
 				+ "layers is bottom-to-top: layers[i] is placed at y = origin.y + i. Each layer is a list of rows: row j is at "
 				+ "z = origin.z + j, and character k in a row is at x = origin.x + k. '.' and ' ' leave the existing block "
-				+ "untouched unless you define them in the palette. Map a character to minecraft:air to clear blocks. Undoable.",
+				+ "untouched unless you define them in the palette. Map a character to minecraft:air to clear blocks. "
+				+ "Blocks appear gradually with sounds while players watch; the call returns when placement is finished. Undoable.",
 			"""
 				{"type":"object","properties":{
 				  "origin":%s,
@@ -193,7 +202,8 @@ public class GameTools {
 			"Fill the box between two corners (inclusive) with one block state. Modes: solid (whole box), hollow (shell of "
 				+ "the block with air inside), outline (shell only, inside untouched), walls (four vertical sides only). "
 				+ "Optional replace limits changes to blocks matching that id (e.g. minecraft:grass_block) or exact state. "
-				+ "Use block minecraft:air to clear space. Undoable.",
+				+ "Use block minecraft:air to clear space. "
+				+ "Blocks appear gradually with sounds while players watch; the call returns when placement is finished. Undoable.",
 			"""
 				{"type":"object","properties":{
 				  "from":%s,"to":%s,
@@ -206,7 +216,8 @@ public class GameTools {
 
 		register("place_blocks",
 			"Place individual blocks at absolute coordinates. Each entry is {\"x\":..,\"y\":..,\"z\":..,\"block\":\"minecraft:...\"} "
-				+ "or a compact array [x, y, z, \"block\"]. Undoable.",
+				+ "or a compact array [x, y, z, \"block\"]. "
+				+ "Blocks appear gradually with sounds while players watch; the call returns when placement is finished. Undoable.",
 			"""
 				{"type":"object","properties":{
 				  "blocks":{"type":"array","items":{}},
@@ -450,7 +461,7 @@ public class GameTools {
 
 	// ---------------------------------------------------------------- placement tools
 
-	private String placeBlueprint(JsonObject args) throws ToolError {
+	private CompletableFuture<String> placeBlueprint(JsonObject args) throws ToolError {
 		ServerLevel level = level(args);
 		BlockPos origin = pos(args, "origin");
 		if (!args.has("palette") || !args.has("layers")) throw new ToolError("palette and layers are required");
@@ -485,10 +496,10 @@ public class GameTools {
 			checkSize(changes.size());
 		}
 		if (!unknown.isEmpty()) throw new ToolError("Characters not in palette: " + String.join(" ", unknown) + " (nothing was placed)");
-		return BlockPlacer.apply(level, changes, undo);
+		return builds.enqueue(level, changes, undo, defaultPlayer);
 	}
 
-	private String fillRegion(JsonObject args) throws ToolError {
+	private CompletableFuture<String> fillRegion(JsonObject args) throws ToolError {
 		ServerLevel level = level(args);
 		BlockPos a = pos(args, "from"), b = pos(args, "to");
 		BlockParser parser = new BlockParser(level);
@@ -533,10 +544,10 @@ public class GameTools {
 				}
 			}
 		}
-		return BlockPlacer.apply(level, changes, undo);
+		return builds.enqueue(level, changes, undo, defaultPlayer);
 	}
 
-	private String placeBlocks(JsonObject args) throws ToolError {
+	private CompletableFuture<String> placeBlocks(JsonObject args) throws ToolError {
 		ServerLevel level = level(args);
 		if (!args.has("blocks") || !args.get("blocks").isJsonArray()) throw new ToolError("blocks must be an array");
 		JsonArray arr = args.getAsJsonArray("blocks");
@@ -558,25 +569,27 @@ public class GameTools {
 			}
 			changes.put(p, parser.parse(block));
 		}
-		return BlockPlacer.apply(level, changes, undo);
+		return builds.enqueue(level, changes, undo, defaultPlayer);
 	}
 
-	/** Must be called on the server thread. */
-	public String undo(int steps) {
+	/** Must be called on the server thread. Completes once the (animated) revert has finished. */
+	public CompletableFuture<String> undo(int steps) {
 		List<UndoHistory.Entry> entries = undo.pop(Math.max(1, steps));
-		if (entries.isEmpty()) return "Nothing to undo.";
-		StringBuilder sb = new StringBuilder();
-		int n = 0;
+		if (entries.isEmpty()) return CompletableFuture.completedFuture("Nothing to undo.");
+		List<CompletableFuture<String>> parts = new ArrayList<>();
 		for (UndoHistory.Entry entry : entries) {
 			for (var dimEntry : entry.originals.entrySet()) {
 				ServerLevel lvl = server.getLevel(dimEntry.getKey());
-				if (lvl == null) continue;
-				sb.append(BlockPlacer.apply(lvl, dimEntry.getValue(), null)).append('\n');
+				if (lvl != null) parts.add(builds.enqueue(lvl, dimEntry.getValue(), null, defaultPlayer));
 			}
-			n++;
 		}
-		sb.append("Undid ").append(n).append(" step(s). ").append(undo.depth()).append(" step(s) remain.");
-		return sb.toString();
+		int n = entries.size();
+		return CompletableFuture.allOf(parts.toArray(CompletableFuture[]::new)).thenApply(v -> {
+			StringBuilder sb = new StringBuilder();
+			for (CompletableFuture<String> part : parts) sb.append(part.join()).append('\n');
+			sb.append("Undid ").append(n).append(" step(s). ").append(undo.depth()).append(" step(s) remain.");
+			return sb.toString();
+		});
 	}
 
 	// ---------------------------------------------------------------- observation tools

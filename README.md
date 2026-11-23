@@ -29,7 +29,14 @@ Claude's replies ◄── stream-json ◄─┘
 | `run_commands` | Any command, run as the requesting player (`@s`, `~`), at a capped permission level |
 | `undo` | Revert the last turn's block changes |
 
-Block placement works the way structure loading does. Fences, panes, walls and stairs connect correctly no matter what order blocks are placed in. Blocks that can't survive, such as half a door or an unsupported torch, are reported back to Claude so it can fix them.
+### Builds you can watch
+
+Claude starts building right away and works in stages: foundation, then walls, then roof, then details. It posts a short progress line in chat between stages and refines as it goes.
+
+- **Animated placement.** Each stage goes up a few blocks at a time, bottom to top, sweeping each layer row by row like a 3D printer.
+- **Sounds and particles.** Every block plays its own placement sound at its position with a puff of particles. Clearing plays break sounds, top-down. Undo animates the same way.
+- **Pacing.** The default is 40 blocks a second. Big stages speed up so none takes longer than 12 seconds. The tool call returns when its stage is done, so Claude sees the result before deciding the next step.
+- **Correct shapes.** Fences, panes and stairs connect as they appear. Placement order doesn't matter: a torch can go up before the wall it hangs on. A final pass works the way structure loading does, and anything still unsupported, such as half a door, is reported back to Claude so it can fix it.
 
 ## Install
 
@@ -42,7 +49,7 @@ The mod looks for `claude` on `PATH`, in `~/.local/bin` and in `~/.claude/local`
 ## In-game commands
 
 - `/claude ask <message>`: talk to Claude without the chat trigger. Also works from the server console.
-- `/claude stop`: stop the current turn and clear the queue.
+- `/claude stop`: stop the current turn, halt any build in progress (blocks already placed stay and can be undone), and clear the queue.
 - `/claude undo [steps]`: revert Claude's block changes. One step is one turn.
 - `/claude reset`: start a fresh conversation.
 - `/claude status`
@@ -58,9 +65,13 @@ The mod looks for `claude` on `PATH`, in `~/.local/bin` and in `~/.claude/local`
 | `extraArgs` | `[]` | Extra CLI args, e.g. `["--effort","high"]` or `["--max-budget-usd","1"]` |
 | `turnTimeoutSeconds` | `900` | Kills a turn that runs longer than this |
 | `maxBlocksPerCall`, `maxScanVolume` | `100000`, `32768` | Safety limits |
+| `animateBuilds` | `true` | `false` places every stage instantly |
+| `buildBlocksPerTick` | `2` | Minimum animation speed (20 ticks per second) |
+| `maxBuildSeconds` | `12` | Large stages speed up to finish within this time |
+| `buildEffects` | `true` | Block sounds and particles while animating |
 | `showToolActivity` | `true` | Shows what Claude is doing (for example "Claude is building...") in the action bar |
 
-`config/claudecraft/system-prompt.md` is Claude's guidance on chat style, coordinates and building quality. It's re-read every turn, so you can tweak it while the game is running.
+`config/claudecraft/system-prompt.md` is Claude's guidance on chat style, staged building, coordinates and building quality. It's re-read every turn, so you can tweak it while the game is running. Mod updates refresh it automatically unless you've edited it. Your edits are never overwritten.
 
 ## Notes and limitations
 

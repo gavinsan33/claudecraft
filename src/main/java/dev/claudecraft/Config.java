@@ -3,7 +3,6 @@ package dev.claudecraft;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -29,6 +28,14 @@ public class Config {
 	public int mcpPort = 0;
 	/** Kill a Claude turn that runs longer than this. */
 	public int turnTimeoutSeconds = 900;
+	/** Place blocks gradually so players can watch builds go up. false = instant. */
+	public boolean animateBuilds = true;
+	/** Minimum placement speed while animating (20 ticks per second). */
+	public int buildBlocksPerTick = 2;
+	/** Big builds speed up so no single placement call animates longer than this. */
+	public int maxBuildSeconds = 12;
+	/** Block sounds and particles while animating. */
+	public boolean buildEffects = true;
 	/** Show what Claude is doing (tool calls) in the action bar. */
 	public boolean showToolActivity = true;
 	/** Extra CLI args appended to every claude invocation, e.g. ["--effort", "high"]. */
@@ -57,12 +64,5 @@ public class Config {
 
 	public boolean isAllowed(String playerName) {
 		return allowedPlayers.isEmpty() || allowedPlayers.stream().anyMatch(p -> p.equalsIgnoreCase(playerName));
-	}
-
-	static void writeIfMissing(Path file, String content) throws IOException {
-		if (!Files.exists(file)) {
-			Files.createDirectories(file.getParent());
-			Files.writeString(file, content);
-		}
 	}
 }

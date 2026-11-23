@@ -6,6 +6,7 @@ import com.mojang.brigadier.context.CommandContext;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.ChatFormatting;
@@ -19,6 +20,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 public class ClaudeCraft implements ModInitializer {
@@ -28,19 +30,19 @@ public class ClaudeCraft implements ModInitializer {
 	private static Config config;
 	private static McpServer mcp;
 	private static GameTools tools;
+	private static BuildQueue builds;
 	private static ClaudeBridge bridge;
 
 	@Override
 	public void onInitialize() {
 		Path configDir = FabricLoader.getInstance().getConfigDir().resolve(MOD_ID);
-		try (InputStream in = ClaudeCraft.class.getResourceAsStream("/claudecraft/system-prompt.md")) {
-			Config.writeIfMissing(configDir.resolve("system-prompt.md"), new String(in.readAllBytes(), StandardCharsets.UTF_8));
-		} catch (Exception e) {
-			LOGGER.error("Couldn't write default system prompt", e);
-		}
+		installSystemPrompt(configDir);
 
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> start(server, configDir));
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> shutdown());
+		ServerTickEvents.END_SERVER_TICK.register(server -> {
+			if (builds != null) builds.tick();
+		});
 
 		ServerMessageEvents.CHAT_MESSAGE.register((message, sender, params) -> {
 			if (bridge == null) return;
@@ -67,12 +69,16 @@ public class ClaudeCraft implements ModInitializer {
 					})))
 				.then(Commands.literal("stop").executes(ctx -> {
 					if (!ready(ctx) || !allowed(ctx)) return 0;
-					reply(ctx, bridge.stop() ? "Stopping Claude." : "Claude wasn't doing anything.");
+					boolean wasBuilding = builds.isBusy();
+					boolean wasThinking = bridge.stop();
+					builds.cancelAll();
+					reply(ctx, wasThinking || wasBuilding ? "Stopping Claude." : "Claude wasn't doing anything.");
 					return 1;
 				}))
 				.then(Commands.literal("reset").executes(ctx -> {
 					if (!ready(ctx) || !allowed(ctx)) return 0;
 					bridge.reset();
+					builds.cancelAll();
 					reply(ctx, "Started a fresh conversation with Claude.");
 					return 1;
 				}))
@@ -89,7 +95,8 @@ public class ClaudeCraft implements ModInitializer {
 
 	private static void start(MinecraftServer server, Path configDir) {
 		config = Config.load(configDir.resolve("config.json"));
-		tools = new GameTools(server, config, new UndoHistory());
+		builds = new BuildQueue(config);
+		tools = new GameTools(server, config, new UndoHistory(), builds);
 		mcp = new McpServer(tools);
 		try {
 			mcp.start(config.mcpPort);
@@ -103,10 +110,55 @@ public class ClaudeCraft implements ModInitializer {
 
 	private static void shutdown() {
 		if (bridge != null) bridge.shutdown();
+		if (builds != null) builds.flushAll();
 		if (mcp != null) mcp.stop();
 		bridge = null;
 		mcp = null;
 		tools = null;
+		builds = null;
+	}
+
+	/**
+	 * Write the bundled system prompt, and keep it up to date across mod updates as long as the
+	 * user hasn't edited it. User edits are never overwritten.
+	 */
+	private static void installSystemPrompt(Path configDir) {
+		Path file = configDir.resolve("system-prompt.md");
+		Path stamp = configDir.resolve(".system-prompt.sha256");
+		try (InputStream in = ClaudeCraft.class.getResourceAsStream("/claudecraft/system-prompt.md")) {
+			String bundled = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+			Files.createDirectories(configDir);
+			boolean write;
+			if (!Files.exists(file)) {
+				write = true;
+			} else {
+				String current = Files.readString(file);
+				String hash = sha256(current);
+				String lastWritten = Files.exists(stamp) ? Files.readString(stamp).strip() : "";
+				boolean untouched = hash.equals(lastWritten) || PREVIOUS_DEFAULT_PROMPTS.contains(hash);
+				write = untouched && !current.equals(bundled);
+			}
+			if (write) {
+				Files.writeString(file, bundled);
+				LOGGER.info("Installed the default ClaudeCraft system prompt at {}", file);
+			}
+			if (write || !Files.exists(stamp)) {
+				// Only stamp content we wrote ourselves, so later edits by the user are recognized.
+				String onDisk = Files.readString(file);
+				if (onDisk.equals(bundled)) Files.writeString(stamp, sha256(bundled));
+			}
+		} catch (Exception e) {
+			LOGGER.error("Couldn't install the default system prompt", e);
+		}
+	}
+
+	/** SHA-256 of default prompts shipped by earlier versions (before the stamp file existed). */
+	private static final java.util.Set<String> PREVIOUS_DEFAULT_PROMPTS = java.util.Set.of(
+		"df2b43c2220db65fc94144d9fdc24b677b469c560be98acace53147fdf8c38d5"); // 0.1.0
+
+	private static String sha256(String s) throws java.security.NoSuchAlgorithmException {
+		return java.util.HexFormat.of().formatHex(
+			java.security.MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8)));
 	}
 
 	static String describeLocation(ServerPlayer p) {
@@ -117,7 +169,8 @@ public class ClaudeCraft implements ModInitializer {
 
 	private static int undo(CommandContext<CommandSourceStack> ctx, int steps) {
 		if (!ready(ctx) || !allowed(ctx)) return 0;
-		reply(ctx, tools.undo(steps));
+		CommandSourceStack source = ctx.getSource();
+		tools.undo(steps).thenAccept(msg -> source.sendSuccess(() -> Component.literal(msg).withStyle(ChatFormatting.GOLD), false));
 		return 1;
 	}
 
