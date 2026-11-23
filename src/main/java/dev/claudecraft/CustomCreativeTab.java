@@ -27,7 +27,7 @@ public final class CustomCreativeTab {
 				// Items, then blocks, then spawn eggs, each alphabetical.
 				defs.sort(Comparator.<JsonObject>comparingInt(d -> CustomBlocks.isBlock(d) ? 1 : CustomEntities.isEntity(d) ? 2 : 0)
 					.thenComparing(d -> d.get("id").getAsString()));
-				for (JsonObject def : defs) if (!def.has("kind") || !def.get("kind").getAsString().equals("dimension")) out.accept(CustomItems.stack(def, 1));
+				for (JsonObject def : defs) if (!def.has("kind") || !List.of("dimension", "effect").contains(def.get("kind").getAsString())) out.accept(CustomItems.stack(def, 1));
 			})
 			.build());
 	}

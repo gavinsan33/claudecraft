@@ -160,6 +160,7 @@ public final class CustomItems {
 		CustomBlocks.register();
 		CustomEntities.register();
 		CustomProjectiles.register();
+		Effects.register();
 		ResourceKey<Item> eggKey = ResourceKey.create(Registries.ITEM, id("custom_spawn_egg"));
 		SPAWN_EGG = Registry.register(BuiltInRegistries.ITEM, eggKey, new CustomSpawnEgg(new Item.Properties().setId(eggKey)));
 		PayloadTypeRegistry.clientboundPlay().registerLarge(DefinitionsPayload.TYPE, DefinitionsPayload.CODEC, MAX_PAYLOAD);

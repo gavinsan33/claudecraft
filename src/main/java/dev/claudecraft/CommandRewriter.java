@@ -38,6 +38,7 @@ final class CommandRewriter {
 	}
 
 	static final String ENTITY_TYPE = "claudecraft:custom_entity";
+	static final String EFFECT_TYPE = "claudecraft:effect";
 
 	/** The tag every creature of a definition carries, so selectors can find them. */
 	static String tag(String id) {
@@ -70,13 +71,13 @@ final class CommandRewriter {
 			// Inside a selector: type=custom:x or type=!custom:x.
 			Matcher sel = Pattern.compile("type\\s*=\\s*(!?)\\s*$").matcher(before);
 			if (sel.find()) {
-				if (!kind.equals("entity")) {
+				if (!kind.equals("entity") && !kind.equals("effect")) {
 					out.append(m.group());
 					continue;
 				}
 				boolean negated = !sel.group(1).isEmpty();
 				out.setLength(out.length() - sel.group().length());
-				out.append(negated ? "tag=!" + tag(id) : "type=" + ENTITY_TYPE + ",tag=" + tag(id));
+				out.append(negated ? "tag=!" + tag(id) : "type=" + (kind.equals("effect") ? EFFECT_TYPE : ENTITY_TYPE) + ",tag=" + tag(id));
 				continue;
 			}
 
@@ -85,12 +86,13 @@ final class CommandRewriter {
 				out.append(kind.equals("dimension") && "in".equals(word) ? "claudecraft:" + id : m.group());
 				continue;
 			}
-			if (kind.equals("entity") && "summon".equals(word) && before.stripTrailing().endsWith("summon")) {
+			boolean summonable = kind.equals("entity") || kind.equals("effect");
+			if (summonable && "summon".equals(word) && before.stripTrailing().endsWith("summon")) {
 				// summon custom:x [pos] [nbt]: the rest of the command belongs to summon.
 				String rest = cmd.substring(m.end());
 				last = cmd.length();
-				out.append(ENTITY_TYPE);
-				String data = "Definition:\"" + id + "\"";
+				out.append(kind.equals("effect") ? EFFECT_TYPE : ENTITY_TYPE);
+				String data = (kind.equals("effect") ? "Effect:\"" : "Definition:\"") + id + "\"";
 				int brace = rest.indexOf('{');
 				if (rest.isBlank()) {
 					out.append(" ~ ~ ~ {").append(data).append('}');
@@ -138,6 +140,7 @@ final class CommandRewriter {
 		defs.put("ruby_ore", com.google.gson.JsonParser.parseString("{\"id\":\"ruby_ore\",\"kind\":\"block\"}").getAsJsonObject());
 		defs.put("hippo", com.google.gson.JsonParser.parseString("{\"id\":\"hippo\",\"kind\":\"entity\"}").getAsJsonObject());
 		defs.put("moon", com.google.gson.JsonParser.parseString("{\"id\":\"moon\",\"kind\":\"dimension\"}").getAsJsonObject());
+		defs.put("black_hole", com.google.gson.JsonParser.parseString("{\"id\":\"black_hole\",\"kind\":\"effect\"}").getAsJsonObject());
 		Items stub = new Items() {
 			public String stack(JsonObject d) { return "STACK(" + d.get("id").getAsString() + ")"; }
 			public String predicate(JsonObject d) { return "PRED(" + d.get("id").getAsString() + ")"; }
@@ -166,6 +169,8 @@ final class CommandRewriter {
 			{"execute in custom:moon run tp @s 0 100 0", "execute in claudecraft:moon run tp @s 0 100 0"},
 			{"execute in custom:moon run give @s custom:ruby", "execute in claudecraft:moon run give @s STACK(ruby)"},
 			{"give @s custom:moon", "give @s custom:moon"},
+			{"summon custom:black_hole ~ ~2 ~", "summon claudecraft:effect ~ ~2 ~ {Effect:\"black_hole\"}"},
+			{"kill @e[type=custom:black_hole]", "kill @e[type=claudecraft:effect,tag=custom.black_hole]"},
 		};
 		int failed = 0;
 		for (String[] c : cases) {
