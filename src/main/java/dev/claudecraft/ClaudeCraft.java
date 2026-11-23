@@ -38,11 +38,15 @@ public class ClaudeCraft implements ModInitializer {
 		Path configDir = FabricLoader.getInstance().getConfigDir().resolve(MOD_ID);
 		installSystemPrompt(configDir);
 		CustomItems.register();
+		OreGeneration.register();
+		CustomRecipes.register();
 
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> start(server, configDir));
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> shutdown());
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
 			if (builds != null) builds.tick();
+			CreatureSpawning.tick(server);
+			OreGeneration.tick(server);
 			if (bridge != null) bridge.tickStatus(builds);
 		});
 
@@ -98,6 +102,8 @@ public class ClaudeCraft implements ModInitializer {
 	private static void start(MinecraftServer server, Path configDir) {
 		config = Config.load(configDir.resolve("config.json"));
 		CustomItems.load(server);
+		CustomItems.onServerChange = () -> CustomRecipes.sync(server);
+		CustomRecipes.sync(server);
 		builds = new BuildQueue(config);
 		tools = new GameTools(server, config, new UndoHistory(), builds);
 		mcp = new McpServer(tools);
@@ -111,9 +117,34 @@ public class ClaudeCraft implements ModInitializer {
 		bridge = new ClaudeBridge(server, config, tools, mcp, configDir);
 	}
 
+	static GameTools tools() {
+		return tools;
+	}
+
 	/** Run a custom item's commands as the player using it. Server thread. */
 	static void runItemCommands(ServerPlayer player, java.util.List<String> commands) {
 		if (tools != null && !commands.isEmpty()) tools.execute(player, commands);
+	}
+
+	/**
+	 * Run a creature's, block's or projectile's commands as that entity (@s), at a position (~ ~ ~), with @target
+	 * standing for another entity by UUID. Server thread.
+	 */
+	static void runAs(net.minecraft.world.entity.Entity self, java.util.List<String> commands, net.minecraft.world.phys.Vec3 at,
+			net.minecraft.world.entity.Entity target) {
+		if (tools == null || commands.isEmpty() || !(self.level() instanceof net.minecraft.server.level.ServerLevel level)) return;
+		java.util.List<String> cmds = new java.util.ArrayList<>();
+		for (String c : commands) cmds.add(CustomItems.withTarget(c.replaceFirst("^/", ""), target));
+		tools.execute(level.getServer().createCommandSourceStack().withLevel(level).withEntity(self)
+			.withPosition(at != null ? at : self.position()).withRotation(self.getRotationVector()).withSuppressedOutput(), cmds);
+	}
+
+	/** Run commands as the server at a position in a level (blocks with nobody involved). Server thread. */
+	static void runAt(net.minecraft.server.level.ServerLevel level, java.util.List<String> commands, net.minecraft.world.phys.Vec3 at) {
+		if (tools == null || commands.isEmpty()) return;
+		java.util.List<String> cmds = new java.util.ArrayList<>();
+		for (String c : commands) cmds.add(c.replaceFirst("^/", ""));
+		tools.execute(level.getServer().createCommandSourceStack().withLevel(level).withPosition(at).withSuppressedOutput(), cmds);
 	}
 
 	private static void shutdown() {

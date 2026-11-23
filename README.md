@@ -19,14 +19,16 @@ Play Minecraft with Claude. Type in chat and Claude builds, invents new items, b
 
 Ask for something that doesn't exist and Claude designs it on the spot and adds it to your world. Everyone sees it right away, with no resource packs and no restart.
 
-- **Items.** "Make me a frost wand that freezes water when I right-click." Claude draws it like a vanilla item and gives it its own powers: damage, food, durability, or right-click abilities.
-- **Blocks.** "Add ruby ore and a glowing mushroom lamp." You can place, mine and build with them like any other block.
-- **Creatures.** "Spawn a family of hippos by the river." Mobs that walk, look around and animate, with their own health, behavior, sounds and drops.
+- **Items.** "Make me a frost wand that freezes water when I right-click." Claude draws it like a vanilla item and gives it its own powers: weapons, food, real pickaxes and axes, armor you can wear, bows and throwables, and abilities on right-click, on hit, or while held or worn.
+- **Blocks.** "Add ruby ore and a glowing mushroom lamp." You can place, mine and build with them like any other block. Ores can need the right pickaxe, drop gems and experience, and generate underground. Blocks can also face you when placed, store items, work with redstone, and grow or spread on their own.
+- **Creatures.** "Spawn a family of hippos by the river." Mobs that walk, fly, swim or hop, with their own health, behavior, sounds and drops. You can tame them, ride them, breed them for babies, and get spawn eggs. They can have ranged attacks and special abilities, and appear on their own in the biomes they belong to.
 
 ![A hippo and its baby, custom creatures Claude designed, on a beach](docs/custom-creature.jpg)
 *These hippos aren't in vanilla Minecraft. Claude designed them, including their look, animation and behavior, and spawned them in.*
 
 Not quite right? Ask for changes ("make it bigger", "give it spots") and the new look shows up everywhere, even on copies already in the world.
+
+Claude can add crafting, smelting and stonecutting recipes, so survival players can make what it invents. Everything also shows up in a ClaudeCraft tab in the creative inventory. Commands can use your inventions too (`/give @s custom:ruby`, `/summon custom:hippo`), and Claude can save a design to a library and load it into another world.
 
 ### And more
 

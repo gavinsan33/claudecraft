@@ -1,4 +1,7 @@
 {
   "item.claudecraft.custom_item": "Custom Item",
-  "block.claudecraft.custom_block": "Custom Block"
+  "item.claudecraft.custom_spawn_egg": "Custom Spawn Egg",
+  "block.claudecraft.custom_block": "Custom Block",
+  "entity.claudecraft.custom_entity": "Custom Creature",
+  "entity.claudecraft.thrown_item": "Thrown Item"
 }

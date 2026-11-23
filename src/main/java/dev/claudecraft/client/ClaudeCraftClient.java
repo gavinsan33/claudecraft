@@ -13,6 +13,7 @@ import net.fabricmc.fabric.api.client.model.loading.v1.ModelLoadingPlugin;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
 import dev.claudecraft.CustomEntities;
+import dev.claudecraft.EntityModel;
 import net.fabricmc.fabric.api.client.renderer.v1.mesh.MutableQuadView;
 import net.fabricmc.fabric.api.client.renderer.v1.mesh.QuadEmitter;
 import net.minecraft.client.Minecraft;
@@ -86,6 +87,7 @@ public class ClaudeCraftClient implements ClientModInitializer {
 		SpecialModelRenderers.ID_MAPPER.put(Identifier.fromNamespaceAndPath("claudecraft", "voxel"), VoxelRenderer.Unbaked.MAP_CODEC);
 		SelectItemModelProperties.ID_MAPPER.put(Identifier.fromNamespaceAndPath("claudecraft", "style"), StyleProperty.TYPE);
 		EntityRendererRegistry.register(CustomEntities.TYPE, CustomEntityRenderer::new);
+		EntityRendererRegistry.register(dev.claudecraft.CustomProjectiles.TYPE, net.minecraft.client.renderer.entity.ThrownItemRenderer::new);
 		CustomItems.onClientChange = blocks -> {
 			MESHES.clear();
 			BLOCK_MESHES.clear();
@@ -100,6 +102,11 @@ public class ClaudeCraftClient implements ClientModInitializer {
 				var cam = area.getCameraSectionPos();
 				int d = area.getViewDistance();
 				mc.level.setSectionRangeDirty(cam.x() - d, area.minSectionY(), cam.z() - d, cam.x() + d, area.maxSectionY(), cam.z() + d);
+			}
+			if (mc.level != null && mc.player != null) {
+				// Refill the ClaudeCraft creative tab with the current designs.
+				dev.claudecraft.CustomCreativeTab.TAB.buildContents(new net.minecraft.world.item.CreativeModeTab.ItemDisplayParameters(
+					mc.level.enabledFeatures(), mc.player.canUseGameMasterBlocks(), mc.level.registryAccess()));
 			}
 		};
 		ModelLoadingPlugin.register(ctx -> ctx.registerBlockStateResolver(CustomBlocks.BLOCK, resolver -> {
@@ -134,11 +141,42 @@ public class ClaudeCraftClient implements ClientModInitializer {
 		if (def == null) return MISSING;
 		return MESHES.computeIfAbsent(id, k -> {
 			try {
+				if (def.has("kind") && def.get("kind").getAsString().equals("entity")) return Mesh.of(spawnEgg(k));
 				return Mesh.of(VoxelModel.parse(def.getAsJsonObject("model")));
 			} catch (RuntimeException e) {
 				return MISSING; // the server validates models, so this only happens with a corrupt save
 			}
 		});
+	}
+
+	/** A spawn egg in the creature's two most common colors: the main color with spots of the second. */
+	static VoxelModel spawnEgg(String id) {
+		EntityModel m = CustomEntities.model(id);
+		Map<Integer, Integer> counts = new java.util.HashMap<>();
+		if (m != null) for (int c : m.flatten()) if ((c >>> 24) != 0) counts.merge(c | 0xFF000000, 1, Integer::sum);
+		List<Integer> byCount = counts.entrySet().stream().sorted(Map.Entry.<Integer, Integer>comparingByValue().reversed()).map(Map.Entry::getKey).toList();
+		int base = byCount.isEmpty() ? 0xFF9A9A9A : byCount.get(0);
+		int spots = byCount.size() > 1 ? byCount.get(1) : shade(base, 0.7f);
+		String[] rows = {
+			"................", "......kkkk......", ".....kbbbbk.....", "....kbbsbbbk....", "....kbbbbbbk....", "...kbsbbbbsbk...",
+			"...kbbbbbbbbk...", "...kbbbbsbbbk...", "..kbbsbbbbbbbk..", "..kbbbbbbbsbbk..", "..kbbbbbbbbbbk..", "..kbsbbbsbbbbk..",
+			"...kbbbbbbbbk...", "....kbbbbbbk....", ".....kkkkkk.....", "................"};
+		com.google.gson.JsonObject palette = new com.google.gson.JsonObject();
+		palette.addProperty("b", hex(base));
+		palette.addProperty("s", hex(spots));
+		palette.addProperty("k", hex(shade(base, 0.55f)));
+		com.google.gson.JsonArray pixels = new com.google.gson.JsonArray();
+		for (String r : rows) pixels.add(r);
+		return VoxelModel.parse(VoxelModel.fromPixels(palette, pixels, 1));
+	}
+
+	private static int shade(int argb, float f) {
+		int r = (int) (((argb >> 16) & 0xFF) * f), g = (int) (((argb >> 8) & 0xFF) * f), b = (int) ((argb & 0xFF) * f);
+		return 0xFF000000 | r << 16 | g << 8 | b;
+	}
+
+	private static String hex(int argb) {
+		return String.format(java.util.Locale.ROOT, "#%06X", argb & 0xFFFFFF);
 	}
 
 	/** Draws a custom item's voxel model inside the item's unit cube, with normal lighting. */
@@ -227,21 +265,37 @@ public class ClaudeCraftClient implements ClientModInitializer {
 		private static final Direction[] DIRS = {Direction.EAST, Direction.WEST, Direction.UP, Direction.DOWN, Direction.SOUTH, Direction.NORTH};
 		private static final float[] U = {0, 1, 1, 0}, V = {1, 1, 0, 0};
 		private final int variant;
+		private final Direction facing;
 		private final Material.Baked white;
 
-		VoxelBlockModel(int variant, Material.Baked white) {
+		VoxelBlockModel(int variant, Direction facing, Material.Baked white) {
 			this.variant = variant;
+			this.facing = facing;
 			this.white = white;
+		}
+
+		/** Turn a side the way the model is turned (its south side faces `facing`). */
+		private Direction turn(Direction d) {
+			if (d.getAxis().isVertical()) return d;
+			return switch (facing) {
+				case EAST -> d.getCounterClockWise();
+				case WEST -> d.getClockWise();
+				case NORTH -> d.getOpposite();
+				default -> d;
+			};
 		}
 
 		@Override
 		public void emitQuads(QuadEmitter e, BlockAndTintGetter level, BlockPos pos, BlockState state, RandomSource random, Predicate<Direction> cullTest) {
 			for (VoxelModel.Quad q : blockMesh(CustomBlocks.idForSlot(variant))) {
-				if (q.boundary() >= 0 && cullTest.test(DIRS[q.boundary()])) continue; // hidden by the neighboring block
+				if (q.boundary() >= 0 && cullTest.test(turn(DIRS[q.boundary()]))) continue; // hidden by the neighboring block
 				float[] c = q.corners();
-				for (int k = 0; k < 4; k++) e.pos(k, c[k * 3], c[k * 3 + 1], c[k * 3 + 2]).color(k, q.argb()).uv(k, U[k], V[k]);
+				for (int k = 0; k < 4; k++) {
+					double[] xz = CustomBlocks.rotate(c[k * 3], c[k * 3 + 2], facing);
+					e.pos(k, (float) xz[0], c[k * 3 + 1], (float) xz[1]).color(k, q.argb()).uv(k, U[k], V[k]);
+				}
 				e.materialBake(white, MutableQuadView.BAKE_NORMALIZED);
-				e.nominalFace(DIRS[q.face()]);
+				e.nominalFace(turn(DIRS[q.face()]));
 				e.chunkLayer(q.translucent() ? ChunkSectionLayer.TRANSLUCENT : ChunkSectionLayer.SOLID);
 				e.emit();
 			}
@@ -266,12 +320,13 @@ public class ClaudeCraftClient implements ClientModInitializer {
 			@Override
 			public BlockStateModel bake(BlockState state, ModelBaker baker) {
 				Material.Baked white = baker.materials().get(new Material(Identifier.fromNamespaceAndPath("claudecraft", "block/white")), () -> "claudecraft:custom_block");
-				return new VoxelBlockModel(state.getValue(CustomBlocks.VARIANT), white);
+				return new VoxelBlockModel(state.getValue(CustomBlocks.VARIANT), state.getValue(CustomBlocks.FACING), white);
 			}
 
 			@Override
 			public Object visualEqualityGroup(BlockState state) {
-				return state.getValue(CustomBlocks.VARIANT); // light doesn't change how it looks
+				// Light and power don't change how it looks.
+				return state.getValue(CustomBlocks.VARIANT) * 4 + state.getValue(CustomBlocks.FACING).get2DDataValue();
 			}
 
 			@Override

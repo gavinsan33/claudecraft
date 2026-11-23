@@ -30,13 +30,14 @@ java {
 	}
 }
 
+// Server game tests (headless): ./gradlew runGameTest
 // Client game test: launches the real game (headless under xvfb-run) and screenshots custom items.
 // Run with: xvfb-run -a ./gradlew runClientGameTest
 fabricApi {
 	configureTests {
 		createSourceSet = true
 		modId = "claudecraft-gametest"
-		enableGameTests = false
+		enableGameTests = true
 		enableClientGameTests = true
 		eula = true
 	}

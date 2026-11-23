@@ -98,6 +98,8 @@ public class CustomBlocksClientTest implements FabricClientGameTest {
 				level.setBlockAndUpdate(new BlockPos(-1, y + 1, 4), CustomBlocks.state(CustomItems.DEFS.get("lantern")));
 				level.setBlockAndUpdate(new BlockPos(1, y + 1, 4), CustomBlocks.state(CustomItems.DEFS.get("blue_glass")));
 				level.setBlockAndUpdate(new BlockPos(1, y + 2, 4), CustomBlocks.state(CustomItems.DEFS.get("blue_glass")));
+				// A turned block exercises the rotated model.
+				level.setBlockAndUpdate(new BlockPos(0, y + 1, 4), CustomBlocks.state(CustomItems.DEFS.get("lantern")).setValue(CustomBlocks.FACING, net.minecraft.core.Direction.EAST));
 				server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), "tp @a 0.5 " + (y + 1) + " 0.5 0 25");
 				server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), "time set night");
 			});
