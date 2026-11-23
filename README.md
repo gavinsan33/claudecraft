@@ -8,17 +8,29 @@ Play Minecraft with Claude. Type in chat and Claude builds, invents new items, b
 
 ## What Claude can do
 
-- **Build anything.** "Build the Eiffel Tower over there." Blocks go up in front of you with sounds and particles while Claude designs the rest. It shapes terrain, uses WorldEdit-style tools for domes, towers and curves, and looks at its own work to fix what's off.
-- **Invent items.** "Make me a frost wand that freezes water when I right-click." Claude draws the item and gives it to you, with its own damage, food, durability or right-click powers.
-- **Invent blocks.** "Add ruby ore and a glowing mushroom lamp." Custom blocks you can place, mine and build with.
-- **Invent creatures.** "Spawn a family of hippos by the river." Animated mobs with their own size, health, behavior, sounds and drops.
-- **Do anything a server operator can.** Give items, summon mobs, change the time and weather, teleport, set up redstone.
+### Build
+
+"Build the Eiffel Tower over there." Blocks go up in front of you with sounds and particles while Claude designs the rest. It shapes terrain, uses WorldEdit-style tools for domes, towers and curves, and looks at its own work to fix what's off.
 
 ![A Taj Mahal, a giant sprinkled donut and the White House, built by Claude in one world](docs/showcase.jpg)
+*A Taj Mahal, a giant donut and the White House, all built by Claude in one world.*
+
+### Invent things that aren't in Minecraft
+
+Ask for something that doesn't exist and Claude designs it on the spot and adds it to your world. Everyone sees it right away, with no resource packs and no restart.
+
+- **Items.** "Make me a frost wand that freezes water when I right-click." Claude draws it like a vanilla item and gives it its own powers: damage, food, durability, or right-click abilities.
+- **Blocks.** "Add ruby ore and a glowing mushroom lamp." You can place, mine and build with them like any other block.
+- **Creatures.** "Spawn a family of hippos by the river." Mobs that walk, look around and animate, with their own health, behavior, sounds and drops.
 
 ![A hippo and its baby, custom creatures Claude designed, on a beach](docs/custom-creature.jpg)
+*These hippos aren't in vanilla Minecraft. Claude designed them, including their look, animation and behavior, and spawned them in.*
 
-Claude remembers the conversation for each world, so you can say "make the tower taller" later. If it builds something you don't like, `/claude undo`.
+Not quite right? Ask for changes ("make it bigger", "give it spots") and the new look shows up everywhere, even on copies already in the world.
+
+### And more
+
+Claude can do anything a server operator can: give items, summon mobs, change the time and weather, teleport, set up redstone. It remembers the conversation for each world, so you can say "make the tower taller" later. If it builds something you don't like, `/claude undo`.
 
 ## Install
 
