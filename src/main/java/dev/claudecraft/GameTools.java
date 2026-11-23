@@ -289,7 +289,8 @@ public class GameTools {
 				+ "torus (center, major radius, minor radius, axis of the hole), line (points: a polyline, radius 0 = thin), "
 				+ "curve (points: a smooth spline through every point, like WorldEdit //curve; for arches, cables, curved legs). "
 				+ "hollow draws only a 1-block shell and leaves the inside untouched; hollow cylinders, cones and pyramids "
-				+ "are open at the ends/base (tubes, roofs). Coordinates are block positions; radii may be decimals." + QUEUED,
+				+ "are open at the ends/base (tubes, roofs), while hollow lines and curves are closed shells, e.g. a two-point "
+				+ "line with radius 3 is a capsule. Coordinates are block positions; radii may be decimals." + QUEUED,
 			"""
 				{"type":"object","properties":{
 				  "shape":{"type":"string","enum":["sphere","dome","cylinder","cone","pyramid","torus","line","curve"]},
@@ -890,6 +891,7 @@ public class GameTools {
 			}
 			double radius = Math.max(0, optDouble(args, "radius", 0));
 			voxels = shape.equals("curve") ? Shapes.curve(pts, radius) : Shapes.line(pts, radius);
+			if (hollow) voxels = Shapes.hollow(voxels);
 		} else {
 			BlockPos c = pos(args, "center");
 			double r = optDouble(args, "radius", -1);
