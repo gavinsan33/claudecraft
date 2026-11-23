@@ -40,6 +40,7 @@ public class ClaudeCraft implements ModInitializer {
 		CustomItems.register();
 		OreGeneration.register();
 		CustomRecipes.register();
+		net.minecraft.core.Registry.register(net.minecraft.core.registries.BuiltInRegistries.CHUNK_GENERATOR, CustomItems.id("custom"), CustomChunkGenerator.CODEC);
 
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> start(server, configDir));
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> shutdown());
@@ -92,6 +93,12 @@ public class ClaudeCraft implements ModInitializer {
 					.executes(ctx -> undo(ctx, 1))
 					.then(Commands.argument("steps", IntegerArgumentType.integer(1, 50))
 						.executes(ctx -> undo(ctx, IntegerArgumentType.getInteger(ctx, "steps")))))
+				.then(Commands.literal("visit").requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
+					// For portals: a custom block's step_commands or use_commands run "claude visit <dimension>".
+					.then(Commands.argument("dimension", StringArgumentType.word())
+						.executes(ctx -> visit(ctx, java.util.List.of(ctx.getSource().getPlayerOrException())))
+						.then(Commands.argument("targets", net.minecraft.commands.arguments.EntityArgument.players())
+							.executes(ctx -> visit(ctx, net.minecraft.commands.arguments.EntityArgument.getPlayers(ctx, "targets"))))))
 				.then(Commands.literal("status").executes(ctx -> {
 					if (!ready(ctx)) return 0;
 					reply(ctx, "Claude: " + bridge.status());
@@ -104,6 +111,7 @@ public class ClaudeCraft implements ModInitializer {
 		CustomItems.load(server);
 		CustomItems.onServerChange = () -> CustomRecipes.sync(server);
 		CustomRecipes.sync(server);
+		Dimensions.loadAll(server);
 		builds = new BuildQueue(config);
 		tools = new GameTools(server, config, new UndoHistory(), builds);
 		mcp = new McpServer(tools);
@@ -145,6 +153,18 @@ public class ClaudeCraft implements ModInitializer {
 		java.util.List<String> cmds = new java.util.ArrayList<>();
 		for (String c : commands) cmds.add(c.replaceFirst("^/", ""));
 		tools.execute(level.getServer().createCommandSourceStack().withLevel(level).withPosition(at).withSuppressedOutput(), cmds);
+	}
+
+	private static int visit(com.mojang.brigadier.context.CommandContext<net.minecraft.commands.CommandSourceStack> ctx,
+			java.util.Collection<ServerPlayer> players) {
+		String name = StringArgumentType.getString(ctx, "dimension");
+		var level = Dimensions.level(ctx.getSource().getServer(), name);
+		if (level == null) {
+			ctx.getSource().sendFailure(net.minecraft.network.chat.Component.literal("No dimension " + name));
+			return 0;
+		}
+		for (ServerPlayer p : players) Dimensions.visit(p, level, null);
+		return players.size();
 	}
 
 	private static void shutdown() {

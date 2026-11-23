@@ -18,6 +18,7 @@ import java.util.regex.Pattern;
  * <li>Item predicates ({@code clear}, {@code execute if items}): the item matched by its definition alone.</li>
  * <li>Anything else ({@code give}, {@code item replace ... with}, {@code loot}...): a full item stack with its
  * components; a creature's id gives its spawn egg.</li>
+ * <li>{@code execute in custom:moon}: the dimension's id, claudecraft:moon.</li>
  * </ul>
  * Pure string work, so it can be tested without a game (see main).
  */
@@ -47,6 +48,7 @@ final class CommandRewriter {
 	private static final Set<String> BLOCK_WORDS = Set.of("setblock", "fill", "block", "filtered", "replace");
 	private static final Set<String> PREDICATE_WORDS = Set.of("clear", "items");
 	private static final Set<String> ITEM_WORDS = Set.of("give", "item", "with", "loot", "drop", "summon");
+	private static final Set<String> DIMENSION_WORDS = Set.of("in");
 
 	static String rewrite(String cmd, Function<String, JsonObject> defs, Items items) {
 		if (!cmd.contains("custom:")) return cmd;
@@ -79,6 +81,10 @@ final class CommandRewriter {
 			}
 
 			String word = lastKeyword(before);
+			if (kind.equals("dimension") || "in".equals(word)) {
+				out.append(kind.equals("dimension") && "in".equals(word) ? "claudecraft:" + id : m.group());
+				continue;
+			}
 			if (kind.equals("entity") && "summon".equals(word) && before.stripTrailing().endsWith("summon")) {
 				// summon custom:x [pos] [nbt]: the rest of the command belongs to summon.
 				String rest = cmd.substring(m.end());
@@ -119,7 +125,7 @@ final class CommandRewriter {
 		String[] words = before.trim().split("\\s+");
 		for (int i = words.length - 1; i >= 0; i--) {
 			String w = words[i].replaceFirst("^/", "");
-			if (BLOCK_WORDS.contains(w) || PREDICATE_WORDS.contains(w) || ITEM_WORDS.contains(w)) return w;
+			if (BLOCK_WORDS.contains(w) || PREDICATE_WORDS.contains(w) || ITEM_WORDS.contains(w) || DIMENSION_WORDS.contains(w)) return w;
 		}
 		return null;
 	}
@@ -131,6 +137,7 @@ final class CommandRewriter {
 		defs.put("ruby", com.google.gson.JsonParser.parseString("{\"id\":\"ruby\"}").getAsJsonObject());
 		defs.put("ruby_ore", com.google.gson.JsonParser.parseString("{\"id\":\"ruby_ore\",\"kind\":\"block\"}").getAsJsonObject());
 		defs.put("hippo", com.google.gson.JsonParser.parseString("{\"id\":\"hippo\",\"kind\":\"entity\"}").getAsJsonObject());
+		defs.put("moon", com.google.gson.JsonParser.parseString("{\"id\":\"moon\",\"kind\":\"dimension\"}").getAsJsonObject());
 		Items stub = new Items() {
 			public String stack(JsonObject d) { return "STACK(" + d.get("id").getAsString() + ")"; }
 			public String predicate(JsonObject d) { return "PRED(" + d.get("id").getAsString() + ")"; }
@@ -156,6 +163,9 @@ final class CommandRewriter {
 			{"item replace entity @s armor.head with custom:ruby", "item replace entity @s armor.head with STACK(ruby)"},
 			{"give @s custom:nope", "give @s custom:nope"},
 			{"say custom:ruby is shiny", "say custom:ruby is shiny"},
+			{"execute in custom:moon run tp @s 0 100 0", "execute in claudecraft:moon run tp @s 0 100 0"},
+			{"execute in custom:moon run give @s custom:ruby", "execute in claudecraft:moon run give @s STACK(ruby)"},
+			{"give @s custom:moon", "give @s custom:moon"},
 		};
 		int failed = 0;
 		for (String[] c : cases) {
