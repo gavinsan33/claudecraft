@@ -23,6 +23,8 @@ import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Mirror;
+import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.BlockHitResult;
@@ -40,6 +42,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -172,6 +175,8 @@ public class GameTools {
 		{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"}},"required":["x","y","z"]}""";
 	private static final String DIM_SCHEMA = """
 		{"type":"string","description":"Dimension id, e.g. minecraft:the_nether. Defaults to the requesting player's dimension."}""";
+	private static final String PATTERN_SCHEMA = """
+		{"type":"string","description":"A block state, or a random mix in WorldEdit pattern syntax, e.g. \\"70%minecraft:stone_bricks,20%minecraft:mossy_stone_bricks,10%minecraft:cracked_stone_bricks\\"."}""";
 	private static final String DURATION_SCHEMA = """
 		{"type":"number","description":"Optional: stretch or squeeze this build's animation to take about this many seconds (max 120). Default pacing is fast."}""";
 	private static final String QUEUED =
@@ -206,7 +211,8 @@ public class GameTools {
 				+ "(e.g. \"s\":\"minecraft:stone_bricks\", \"D\":\"minecraft:oak_door[facing=north,half=lower]\"). "
 				+ "layers is bottom-to-top: layers[i] is placed at y = origin.y + i. Each layer is a list of rows: row j is at "
 				+ "z = origin.z + j, and character k in a row is at x = origin.x + k. '.' and ' ' leave the existing block "
-				+ "untouched unless you define them in the palette. Map a character to minecraft:air to clear blocks." + QUEUED,
+				+ "untouched unless you define them in the palette. Map a character to minecraft:air to clear blocks. "
+				+ "Palette values may be random mixes like \"80%minecraft:stone_bricks,20%minecraft:mossy_stone_bricks\"." + QUEUED,
 			"""
 				{"type":"object","properties":{
 				  "origin":%s,
@@ -225,12 +231,12 @@ public class GameTools {
 			"""
 				{"type":"object","properties":{
 				  "from":%s,"to":%s,
-				  "block":{"type":"string"},
+				  "block":%s,
 				  "mode":{"type":"string","enum":["solid","hollow","outline","walls"]},
 				  "replace":{"type":"string","description":"Only replace blocks of this id/state."},
 				  "duration_seconds":%s,
 				  "dimension":%s
-				},"required":["from","to","block"]}""".formatted(POS_SCHEMA, POS_SCHEMA, DURATION_SCHEMA, DIM_SCHEMA),
+				},"required":["from","to","block"]}""".formatted(POS_SCHEMA, POS_SCHEMA, PATTERN_SCHEMA, DURATION_SCHEMA, DIM_SCHEMA),
 			this::fillRegion);
 
 		register("place_blocks",
@@ -243,6 +249,68 @@ public class GameTools {
 				  "dimension":%s
 				},"required":["blocks"]}""".formatted(DURATION_SCHEMA, DIM_SCHEMA),
 			this::placeBlocks);
+
+		register("draw_shape",
+			"Draw a WorldEdit-style shape. Shapes: sphere (center, radius, or radii [rx,ry,rz] for an ellipsoid), "
+				+ "dome (top half of a sphere, center is the middle of its base), cylinder (center of the base, radius, height, "
+				+ "axis y/x/z; negative height extends the other way), cone and pyramid (center of the base, radius = base "
+				+ "half-width, height; negative height points down; a pyramid with height radius+1 has one-block steps), "
+				+ "torus (center, major radius, minor radius, axis of the hole), line (points: a polyline, radius 0 = thin). "
+				+ "hollow draws only a 1-block shell and leaves the inside untouched; hollow cylinders, cones and pyramids "
+				+ "are open at the ends/base (tubes, roofs). Coordinates are block positions; radii may be decimals." + QUEUED,
+			"""
+				{"type":"object","properties":{
+				  "shape":{"type":"string","enum":["sphere","dome","cylinder","cone","pyramid","torus","line"]},
+				  "center":%s,
+				  "radius":{"type":"number"},
+				  "radii":{"type":"array","items":{"type":"number"},"description":"sphere/dome only: [rx, ry, rz]."},
+				  "height":{"type":"integer","description":"cylinder, cone, pyramid. For cylinders along x or z, the length."},
+				  "minor_radius":{"type":"number","description":"torus tube radius (default 1)."},
+				  "axis":{"type":"string","enum":["y","x","z"],"description":"cylinder and torus orientation (default y)."},
+				  "points":{"type":"array","items":%s,"description":"line only: two or more points."},
+				  "hollow":{"type":"boolean"},
+				  "block":%s,
+				  "duration_seconds":%s,
+				  "dimension":%s
+				},"required":["shape","block"]}""".formatted(POS_SCHEMA, POS_SCHEMA, PATTERN_SCHEMA, DURATION_SCHEMA, DIM_SCHEMA),
+			this::drawShape);
+
+		register("generate",
+			"Fill every block in a box where a math expression is true (WorldEdit //generate). Variables: x, y, z run from "
+				+ "-1 to 1 across the box (0 = its center); bx, by, bz are block offsets from the minimum corner; sx, sy, sz are "
+				+ "the box size. Operators + - * / % ^, < <= > >= == !=, && || !, functions abs sqrt sin cos tan asin acos atan "
+				+ "atan2 min max floor ceil round sign exp log pow hypot, constants pi and e. Examples: a tapering curved tower "
+				+ "leg \"abs(x) + abs(z) < (1 - (y+1)/2)^2 * 0.9\", a twisted spire, a wavy wall, an arch. Use it for curves the "
+				+ "other tools can't express." + QUEUED,
+			"""
+				{"type":"object","properties":{
+				  "from":%s,"to":%s,
+				  "expression":{"type":"string"},
+				  "block":%s,
+				  "hollow":{"type":"boolean","description":"Only the shape's 1-block surface."},
+				  "duration_seconds":%s,
+				  "dimension":%s
+				},"required":["from","to","expression","block"]}""".formatted(POS_SCHEMA, POS_SCHEMA, PATTERN_SCHEMA, DURATION_SCHEMA, DIM_SCHEMA),
+			this::generate);
+
+		register("clone_region",
+			"Copy the blocks in a box (inclusive corners) so its minimum corner lands at dest, like WorldEdit copy/paste/stack. "
+				+ "rotate (degrees clockwise seen from above: 0, 90, 180, 270) and mirror (x flips east-west, z flips north-south) "
+				+ "turn stairs, doors and logs correctly. repeat N stacks N copies, each shifted again by the same offset "
+				+ "(dest minus the box's minimum corner). Air in the source is skipped unless include_air. Chest contents and "
+				+ "sign text aren't copied. Build one leg, wing or arch and clone it for symmetry. Waits for queued builds first, "
+				+ "so it copies what they place." + QUEUED,
+			"""
+				{"type":"object","properties":{
+				  "from":%s,"to":%s,"dest":%s,
+				  "rotate":{"type":"integer","enum":[0,90,180,270]},
+				  "mirror":{"type":"string","enum":["none","x","z"]},
+				  "repeat":{"type":"integer","description":"Number of copies (default 1, max 64)."},
+				  "include_air":{"type":"boolean"},
+				  "duration_seconds":%s,
+				  "dimension":%s
+				},"required":["from","to","dest"]}""".formatted(POS_SCHEMA, POS_SCHEMA, POS_SCHEMA, DURATION_SCHEMA, DIM_SCHEMA),
+			this::cloneRegion);
 
 		register("wait_for_builds",
 			"Wait until every queued build has finished animating, then return their results. Call it before your final "
@@ -347,6 +415,46 @@ public class GameTools {
 			} catch (CommandSyntaxException e) {
 				throw new ToolError("Invalid block state '" + s + "': " + e.getMessage());
 			}
+		}
+
+		/** "stone" or "70%stone_bricks,30%mossy_stone_bricks" (commas inside [...] belong to the block state). */
+		Pattern pattern(String s) throws ToolError {
+			List<BlockState> states = new ArrayList<>();
+			List<Double> weights = new ArrayList<>();
+			int depth = 0, start = 0;
+			for (int i = 0; i <= s.length(); i++) {
+				char c = i < s.length() ? s.charAt(i) : ',';
+				if (c == '[' || c == '{') depth++;
+				else if (c == ']' || c == '}') depth--;
+				else if (c == ',' && depth == 0) {
+					String part = s.substring(start, i).trim();
+					start = i + 1;
+					if (part.isEmpty()) continue;
+					var m = java.util.regex.Pattern.compile("^(\\d+(?:\\.\\d+)?)%\\s*(.+)$").matcher(part);
+					double w = 1;
+					if (m.matches()) {
+						w = Double.parseDouble(m.group(1));
+						part = m.group(2);
+					}
+					states.add(parse(part));
+					weights.add(w);
+				}
+			}
+			if (states.isEmpty()) throw new ToolError("Empty block pattern");
+			double[] cum = new double[weights.size()];
+			double total = 0;
+			for (int i = 0; i < cum.length; i++) cum[i] = total += weights.get(i);
+			return new Pattern(states.toArray(BlockState[]::new), cum);
+		}
+	}
+
+	/** One block state, or a weighted random mix of several. */
+	record Pattern(BlockState[] states, double[] cumulative) {
+		BlockState pick() {
+			if (states.length == 1) return states[0];
+			double r = ThreadLocalRandom.current().nextDouble() * cumulative[cumulative.length - 1];
+			for (int i = 0; i < states.length; i++) if (r < cumulative[i]) return states[i];
+			return states[states.length - 1];
 		}
 	}
 
@@ -514,12 +622,12 @@ public class GameTools {
 		BlockPos origin = pos(args, "origin");
 		if (!args.has("palette") || !args.has("layers")) throw new ToolError("palette and layers are required");
 		BlockParser parser = new BlockParser(level);
-		Map<Integer, BlockState> palette = new HashMap<>();
+		Map<Integer, Pattern> palette = new HashMap<>();
 		for (var e : args.getAsJsonObject("palette").entrySet()) {
 			if (e.getKey().codePointCount(0, e.getKey().length()) != 1) {
 				throw new ToolError("Palette keys must be single characters, got '" + e.getKey() + "'");
 			}
-			palette.put(e.getKey().codePointAt(0), parser.parse(e.getValue().getAsString()));
+			palette.put(e.getKey().codePointAt(0), parser.pattern(e.getValue().getAsString()));
 		}
 		JsonArray layers = args.getAsJsonArray("layers");
 		LinkedHashMap<BlockPos, BlockState> changes = new LinkedHashMap<>();
@@ -532,9 +640,9 @@ public class GameTools {
 				for (int i = 0; i < row.length(); ) {
 					int cp = row.codePointAt(i);
 					i += Character.charCount(cp);
-					BlockState st = palette.get(cp);
+					Pattern st = palette.get(cp);
 					if (st != null) {
-						changes.put(origin.offset(x, y, z), st);
+						changes.put(origin.offset(x, y, z), st.pick());
 					} else if (cp != '.' && cp != ' ') {
 						unknown.add(new String(Character.toChars(cp)));
 					}
@@ -557,7 +665,7 @@ public class GameTools {
 		ServerLevel level = level(args);
 		BlockPos a = pos(args, "from"), b = pos(args, "to");
 		BlockParser parser = new BlockParser(level);
-		BlockState state = parser.parse(args.get("block").getAsString());
+		Pattern state = parser.pattern(args.get("block").getAsString());
 		String mode = args.has("mode") ? args.get("mode").getAsString() : "solid";
 		BlockState air = net.minecraft.world.level.block.Blocks.AIR.defaultBlockState();
 
@@ -582,10 +690,10 @@ public class GameTools {
 					boolean edgeXZ = x == x0 || x == x1 || z == z0 || z == z1;
 					boolean shell = edgeXZ || y == y0 || y == y1;
 					BlockState target = switch (mode) {
-						case "solid" -> state;
-						case "hollow" -> shell ? state : air;
-						case "outline" -> shell ? state : null;
-						case "walls" -> edgeXZ ? state : null;
+						case "solid" -> state.pick();
+						case "hollow" -> shell ? state.pick() : air;
+						case "outline" -> shell ? state.pick() : null;
+						case "walls" -> edgeXZ ? state.pick() : null;
 						default -> throw new ToolError("Unknown mode " + mode);
 					};
 					if (target == null) continue;
@@ -624,6 +732,155 @@ public class GameTools {
 			changes.put(p, parser.parse(block));
 		}
 		return queueBuild(level, changes, args);
+	}
+
+	private static final long MAX_SHAPE_VOLUME = 4_000_000;
+
+	private String drawShape(JsonObject args) throws ToolError {
+		ServerLevel level = level(args);
+		String shape = args.has("shape") ? args.get("shape").getAsString() : "";
+		Pattern block = new BlockParser(level).pattern(args.get("block").getAsString());
+		boolean hollow = args.has("hollow") && args.get("hollow").getAsBoolean();
+		List<int[]> voxels;
+		if (shape.equals("line")) {
+			if (!args.has("points") || !args.get("points").isJsonArray() || args.getAsJsonArray("points").isEmpty()) {
+				throw new ToolError("line needs points: [{x,y,z}, ...]");
+			}
+			List<int[]> pts = new ArrayList<>();
+			JsonObject wrap = new JsonObject();
+			for (JsonElement e : args.getAsJsonArray("points")) {
+				wrap.add("p", e);
+				BlockPos p = pos(wrap, "p");
+				pts.add(new int[]{p.getX(), p.getY(), p.getZ()});
+			}
+			voxels = Shapes.line(pts, Math.max(0, optDouble(args, "radius", 0)));
+		} else {
+			BlockPos c = pos(args, "center");
+			double r = optDouble(args, "radius", -1);
+			char axis = args.has("axis") ? args.get("axis").getAsString().charAt(0) : 'y';
+			if ("xyz".indexOf(axis) < 0) throw new ToolError("axis must be x, y or z");
+			Shapes.Shape s = switch (shape) {
+				case "sphere", "dome" -> {
+					double rx = r, ry = r, rz = r;
+					if (args.has("radii")) {
+						JsonArray a = args.getAsJsonArray("radii");
+						if (a.size() != 3) throw new ToolError("radii must be [rx, ry, rz]");
+						rx = a.get(0).getAsDouble(); ry = a.get(1).getAsDouble(); rz = a.get(2).getAsDouble();
+					}
+					if (rx < 0 || ry < 0 || rz < 0) throw new ToolError(shape + " needs radius or radii");
+					yield Shapes.sphere(c.getX(), c.getY(), c.getZ(), rx, ry, rz, shape.equals("dome"));
+				}
+				case "cylinder" -> Shapes.cylinder(c.getX(), c.getY(), c.getZ(), needRadius(r, shape), needHeight(args, shape), axis);
+				case "cone" -> Shapes.cone(c.getX(), c.getY(), c.getZ(), needRadius(r, shape), needHeight(args, shape));
+				case "pyramid" -> Shapes.pyramid(c.getX(), c.getY(), c.getZ(), needRadius(r, shape),
+					args.has("height") ? needHeight(args, shape) : (int) Math.round(r) + 1);
+				case "torus" -> Shapes.torus(c.getX(), c.getY(), c.getZ(), needRadius(r, shape), optDouble(args, "minor_radius", 1), axis);
+				default -> throw new ToolError("Unknown shape '" + shape + "'");
+			};
+			if (s.volume() > MAX_SHAPE_VOLUME) throw new ToolError("Shape is too big (" + s.volume() + " blocks in its bounding box).");
+			voxels = s.voxels(hollow);
+		}
+		checkSize(voxels.size());
+		LinkedHashMap<BlockPos, BlockState> changes = new LinkedHashMap<>();
+		for (int[] v : voxels) changes.put(new BlockPos(v[0], v[1], v[2]), block.pick());
+		return queueBuild(level, changes, args);
+	}
+
+	private static double needRadius(double r, String shape) throws ToolError {
+		if (r < 0) throw new ToolError(shape + " needs a radius");
+		return r;
+	}
+
+	private static int needHeight(JsonObject args, String shape) throws ToolError {
+		int h = optInt(args, "height", 0);
+		if (h == 0) throw new ToolError(shape + " needs a non-zero height");
+		return h;
+	}
+
+	private static double optDouble(JsonObject o, String key, double def) {
+		return o.has(key) && !o.get(key).isJsonNull() ? o.get(key).getAsDouble() : def;
+	}
+
+	private String generate(JsonObject args) throws ToolError {
+		ServerLevel level = level(args);
+		BlockPos a = pos(args, "from"), b = pos(args, "to");
+		Pattern block = new BlockParser(level).pattern(args.get("block").getAsString());
+		boolean hollow = args.has("hollow") && args.get("hollow").getAsBoolean();
+		int x0 = Math.min(a.getX(), b.getX()), y0 = Math.min(a.getY(), b.getY()), z0 = Math.min(a.getZ(), b.getZ());
+		int sx = Math.abs(a.getX() - b.getX()) + 1, sy = Math.abs(a.getY() - b.getY()) + 1, sz = Math.abs(a.getZ() - b.getZ()) + 1;
+		if ((long) sx * sy * sz > MAX_SHAPE_VOLUME) throw new ToolError("Box is too big (" + (long) sx * sy * sz + " blocks).");
+		Shapes.Expr expr;
+		try {
+			expr = Shapes.parse(args.get("expression").getAsString(), List.of("x", "y", "z", "bx", "by", "bz", "sx", "sy", "sz"));
+		} catch (IllegalArgumentException e) {
+			throw new ToolError("Bad expression: " + e.getMessage());
+		}
+		double[] v = new double[]{0, 0, 0, 0, 0, 0, sx, sy, sz};
+		Shapes.Solid solid = (x, y, z) -> {
+			int bx = x - x0, by = y - y0, bz = z - z0;
+			if (bx < 0 || by < 0 || bz < 0 || bx >= sx || by >= sy || bz >= sz) return false;
+			v[0] = sx == 1 ? 0 : 2.0 * bx / (sx - 1) - 1;
+			v[1] = sy == 1 ? 0 : 2.0 * by / (sy - 1) - 1;
+			v[2] = sz == 1 ? 0 : 2.0 * bz / (sz - 1) - 1;
+			v[3] = bx; v[4] = by; v[5] = bz;
+			double r = expr.eval(v);
+			return r != 0 && !Double.isNaN(r);
+		};
+		List<int[]> voxels = new Shapes.Shape(x0, y0, z0, x0 + sx - 1, y0 + sy - 1, z0 + sz - 1, solid, (char) 0).voxels(hollow);
+		checkSize(voxels.size());
+		LinkedHashMap<BlockPos, BlockState> changes = new LinkedHashMap<>();
+		for (int[] p : voxels) changes.put(new BlockPos(p[0], p[1], p[2]), block.pick());
+		return queueBuild(level, changes, args);
+	}
+
+	private Object cloneRegion(JsonObject args) throws ToolError {
+		ServerLevel level = level(args);
+		BlockPos a = pos(args, "from"), b = pos(args, "to"), dest = pos(args, "dest");
+		int rot = optInt(args, "rotate", 0);
+		Rotation rotation = switch (Math.floorMod(rot, 360)) {
+			case 0 -> Rotation.NONE;
+			case 90 -> Rotation.CLOCKWISE_90;
+			case 180 -> Rotation.CLOCKWISE_180;
+			case 270 -> Rotation.COUNTERCLOCKWISE_90;
+			default -> throw new ToolError("rotate must be 0, 90, 180 or 270");
+		};
+		String mir = args.has("mirror") ? args.get("mirror").getAsString() : "none";
+		Mirror mirror = switch (mir) {
+			case "none", "" -> Mirror.NONE;
+			case "x" -> Mirror.FRONT_BACK;
+			case "z" -> Mirror.LEFT_RIGHT;
+			default -> throw new ToolError("mirror must be none, x or z");
+		};
+		int repeat = optInt(args, "repeat", 1);
+		if (repeat < 1 || repeat > 64) throw new ToolError("repeat must be 1..64");
+		boolean includeAir = args.has("include_air") && args.get("include_air").getAsBoolean();
+		BlockPos min = new BlockPos(Math.min(a.getX(), b.getX()), Math.min(a.getY(), b.getY()), Math.min(a.getZ(), b.getZ()));
+		int sx = Math.abs(a.getX() - b.getX()) + 1, sy = Math.abs(a.getY() - b.getY()) + 1, sz = Math.abs(a.getZ() - b.getZ()) + 1;
+		checkSize((long) sx * sy * sz * repeat);
+		BlockPos step = dest.subtract(min);
+
+		return afterBuilds(() -> {
+			LinkedHashMap<BlockPos, BlockState> changes = new LinkedHashMap<>();
+			BlockPos.MutableBlockPos mp = new BlockPos.MutableBlockPos();
+			for (int y = 0; y < sy; y++) for (int z = 0; z < sz; z++) for (int x = 0; x < sx; x++) {
+				BlockState st = level.getBlockState(mp.set(min.getX() + x, min.getY() + y, min.getZ() + z));
+				if (st.isAir() && !includeAir) continue;
+				int mx = mirror == Mirror.FRONT_BACK ? sx - 1 - x : x, mz = mirror == Mirror.LEFT_RIGHT ? sz - 1 - z : z;
+				// Rotate within the box so the result's minimum corner stays at the origin.
+				int tx, tz;
+				switch (rotation) {
+					case CLOCKWISE_90 -> { tx = sz - 1 - mz; tz = mx; }
+					case CLOCKWISE_180 -> { tx = sx - 1 - mx; tz = sz - 1 - mz; }
+					case COUNTERCLOCKWISE_90 -> { tx = mz; tz = sx - 1 - mx; }
+					default -> { tx = mx; tz = mz; }
+				}
+				BlockState out = st.mirror(mirror).rotate(rotation);
+				for (int k = 1; k <= repeat; k++) {
+					changes.put(min.offset(step.getX() * k + tx, step.getY() * k + y, step.getZ() * k + tz), out);
+				}
+			}
+			return queueBuild(level, changes, args);
+		});
 	}
 
 	/** Must be called on the server thread. Waits for queued builds, then completes once the (animated) revert has finished. */

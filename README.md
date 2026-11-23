@@ -24,11 +24,16 @@ Claude's replies ◄── stream-json ◄─┘
 | `get_terrain` | Surface heightmap plus surface blocks for an area |
 | `scan_area` | Read blocks in a box, in the same format `place_blueprint` uses |
 | `place_blueprint` | Palette plus layered character grid. Claude's main way to build things it designed itself |
+| `draw_shape` | WorldEdit-style sphere, dome, cylinder (any axis), cone, pyramid, torus and polyline, solid or hollow |
+| `generate` | Fill a box wherever a math expression is true, like WorldEdit's `//generate` |
+| `clone_region` | Copy a box with rotation, mirroring and stacking (`//copy`, `//paste`, `//stack`) |
 | `fill_region` | Box fill: solid, hollow, outline or walls, with an optional replace filter |
 | `place_blocks` | Individual blocks at exact coordinates |
 | `wait_for_builds` | Wait for queued builds to finish and get their results |
 | `run_commands` | Any command, run as the requesting player (`@s`, `~`), at a capped permission level |
 | `undo` | Revert the last turn's block changes |
+
+Any `block` argument, and blueprint palette entries, can be a WorldEdit-style random mix such as `70%stone_bricks,30%mossy_stone_bricks`.
 
 ### Builds you can watch
 
