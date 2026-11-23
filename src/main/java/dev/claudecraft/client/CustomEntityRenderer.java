@@ -28,6 +28,9 @@ public class CustomEntityRenderer extends EntityRenderer<CustomEntities.CustomEn
 		String definition = "";
 		float width = 0.5f;
 		boolean airborne;
+		boolean sitting;
+		/** Size scale: babies are half size. */
+		float scale = 1;
 	}
 
 	public CustomEntityRenderer(EntityRendererProvider.Context ctx) {
@@ -51,7 +54,9 @@ public class CustomEntityRenderer extends EntityRenderer<CustomEntities.CustomEn
 		s.deathTime = e.deathTime > 0 ? e.deathTime + pt : 0;
 		s.hasRedOverlay = e.hurtTime > 0 || e.deathTime > 0;
 		s.width = e.getBbWidth();
-		s.airborne = !e.onGround();
+		s.airborne = !e.onGround() && !e.isPassenger();
+		s.sitting = e.isInSittingPose();
+		s.scale = e.getScale() * e.getAgeScale();
 	}
 
 	@Override
@@ -65,6 +70,11 @@ public class CustomEntityRenderer extends EntityRenderer<CustomEntities.CustomEn
 		int overlay = net.minecraft.client.renderer.entity.LivingEntityRenderer.getOverlayCoords(s, 0);
 		pose.pushPose();
 		pose.rotateDegrees(Axis.YP, (-s.bodyRot)); // the model's front (+z) faces where the creature faces
+		pose.scale(s.scale, s.scale, s.scale);
+		if (s.sitting && model != null) {
+			pose.translate(0, -model.height() * 0.2f, 0); // settle down; legs stay still
+			s.walkAnimationSpeed = 0;
+		}
 		if (s.deathTime > 0) {
 			float f = Math.min(1, Mth.sqrt((s.deathTime - 1) / 20f * 1.6f));
 			pose.rotateDegrees(Axis.ZP, (f * 90)); // tip over, like vanilla mobs

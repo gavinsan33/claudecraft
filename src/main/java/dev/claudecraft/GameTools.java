@@ -117,6 +117,11 @@ public class GameTools {
 		return arr;
 	}
 
+	/** Run a tool's handler directly on the current (server) thread. For tests. */
+	Object runTool(String name, JsonObject args) throws Exception {
+		return tools.get(name).handler().run(args);
+	}
+
 	public JsonObject call(String name, JsonObject args) {
 		Tool tool = tools.get(name);
 		String text;
@@ -418,6 +423,7 @@ public class GameTools {
 				},"required":["from","to"]}""".formatted(POS_SCHEMA, POS_SCHEMA, DIM_SCHEMA),
 			this::viewBuild);
 
+		String commandsNote = " Commands may name custom things as custom:<id>, as in run_commands; @target stands for the other entity involved.";
 		register("define_item",
 			"Create a custom item, or update one by reusing its id. It appears for every player right away, drawn from "
 				+ "your voxel model with real lighting. Draw flat items as pixel art in pixels (rows top to bottom, characters "
@@ -426,9 +432,11 @@ public class GameTools {
 				+ "to #RRGGBB or #AARRGGBB colors (alpha below FF is see-through); '.' and ' ' are empty. Up to 32 voxels per "
 				+ "side; 16 is one item's normal size and bigger models are scaled to fit. style picks how it's held: item "
 				+ "(flat items like food, gems, potions), handheld (tools and weapons, held like a sword; draw them diagonally, "
-				+ "bottom-left to top-right like vanilla), block (chunky 3D objects held like a block). properties set behavior. "
-				+ "Updating a definition changes the look, name and commands of existing copies at once; stack size, food, "
-				+ "damage, durability, glint, rarity and cooldown apply to copies given afterwards.",
+				+ "bottom-left to top-right like vanilla), block (chunky 3D objects held like a block). properties set behavior: "
+				+ "weapons, food, tools that really mine (tool), wearable armor (armor), launchers and throwables (shoot), "
+				+ "commands on right-click, on hit, on a block or creature, and every second while held or worn, fuel, anvil "
+				+ "repair, enchanting, and crafting recipes. Updating a definition updates every copy, including ones players "
+				+ "already have." + commandsNote,
 			"""
 				{"type":"object","properties":{
 				  "id":{"type":"string","description":"Lowercase letters, digits and underscores, e.g. ruby_sword."},
@@ -445,12 +453,30 @@ public class GameTools {
 				    "attack_damage":{"type":"number","description":"Total melee damage, e.g. 7 like a diamond sword."},
 				    "attack_speed":{"type":"number","description":"Attacks per second, e.g. 1.6 like a sword."},
 				    "food":{"type":"object","properties":{"nutrition":{"type":"integer"},"saturation":{"type":"number"},"always_edible":{"type":"boolean"}}},
+				    "tool":{"type":"object","description":"Mines like a vanilla tool of this type and tier (correct drops, speed).","properties":{
+				      "type":{"type":"string","enum":%s},"tier":{"type":"string","enum":%s},"speed":{"type":"number","description":"Mining speed; default from tier (iron 6, diamond 8)."}}},
+				    "armor":{"type":"object","description":"Wearable in a slot: right-click to put on.","properties":{
+				      "slot":{"type":"string","enum":%s},"armor":{"type":"number","description":"Armor points; a diamond chestplate has 8, helmet 3."},
+				      "toughness":{"type":"number"},"knockback_resistance":{"type":"number","description":"0 to 1."},
+				      "look":{"type":"string","enum":%s,"description":"How it looks when worn: model shows your voxel model on the head (head slot only); the others reuse that vanilla armor's look. Default: model for head, leather otherwise."},
+				      "color":{"type":"string","description":"#RRGGBB tint for the leather look; default is the model's average color."}}},
+				    "shoot":%s,
 				    "use_commands":{"type":"array","items":{"type":"string"},"description":"Run as the player on right-click (or when eaten, for food). @s is the player, ~ ~ ~ their position."},
+				    "use_on_block_commands":{"type":"array","items":{"type":"string"},"description":"Run as the player when they right-click a block with it; ~ ~ ~ is the block."},
+				    "use_on_entity_commands":{"type":"array","items":{"type":"string"},"description":"Run as the player when they right-click a creature with it; @target is the creature, ~ ~ ~ its position."},
+				    "hit_commands":{"type":"array","items":{"type":"string"},"description":"Run as the player when they hit something with it; @target is what was hit, ~ ~ ~ its position."},
+				    "held_commands":{"type":"array","items":{"type":"string"},"description":"Run as the player every second while it's in a hand, e.g. effect give @s night_vision 3 0 true."},
+				    "worn_commands":{"type":"array","items":{"type":"string"},"description":"Run as the player every second while it's worn (armor only)."},
 				    "cooldown_seconds":{"type":"number"},
 				    "glint":{"type":"boolean"},
-				    "rarity":{"type":"string","enum":["common","uncommon","rare","epic"]}
+				    "rarity":{"type":"string","enum":["common","uncommon","rare","epic"]},
+				    "fuel_seconds":{"type":"number","description":"Burns in a furnace this long; coal is 80."},
+				    "repair_with":{"type":"array","items":{"type":"string"},"description":"Items or #tags that repair it in an anvil, e.g. [\\"minecraft:diamond\\"]."},
+				    "enchantability":{"type":"integer","description":"Makes it enchantable at an enchanting table; iron is 14, gold 22. It takes the enchantments of the vanilla items it behaves like (sword, tool, armor piece, bow)."},
+				    "recipes":%s
 				  }}
-				},"required":["id","name","palette"]}""",
+				},"required":["id","name","palette"]}""".formatted(json(CustomItems.TOOL_TYPES), json(CustomItems.TIERS), json(CustomItems.ARMOR_SLOTS),
+				json(CustomItems.ARMOR_LOOKS), SHOOT_SCHEMA, RECIPES_SCHEMA),
 			this::defineItem);
 
 		register("define_block",
@@ -462,9 +488,13 @@ public class GameTools {
 				+ "#AARRGGBB colors (alpha below FF is see-through, like glass). Place it with any placement tool as "
 				+ "custom:<id> (patterns and masks too), or give it with give_item. properties: light (0 to 15), hardness "
 				+ "(seconds-ish to mine; 1.5 is stone, 0 instant, -1 unbreakable), sound, collision (model: the voxel shape, "
-				+ "full, or none to walk through), and use_commands that run when a player right-clicks it, as that player but "
-				+ "at the block (~ ~ ~ is the block). Updating changes the look, shape, sound and commands of blocks already "
-				+ "placed; light applies to blocks placed afterwards. Up to " + CustomBlocks.SLOTS + " block designs per world.",
+				+ "full, or none to walk through), rotate (turns to face whoever places it; the model's south side is its "
+				+ "front), the tool that mines it and what it drops (ores: tool pickaxe, tier iron, drops custom:ruby 1-2, xp), "
+				+ "storage (a chest-like inventory), redstone (power emitted, commands when powered or unpowered), commands "
+				+ "on right-click, when stepped on and on random ticks (about once a minute per block, for growth or "
+				+ "spreading), natural generation as an ore in the world (generate), and recipes. Updating changes blocks "
+				+ "already placed; light applies to blocks placed afterwards. Up to " + CustomBlocks.SLOTS + " block designs per world."
+				+ commandsNote,
 			"""
 				{"type":"object","properties":{
 				  "id":{"type":"string","description":"Lowercase letters, digits and underscores, e.g. ruby_ore."},
@@ -478,9 +508,30 @@ public class GameTools {
 				    "hardness":{"type":"number"},
 				    "sound":{"type":"string","enum":%s},
 				    "collision":{"type":"string","enum":["model","full","none"]},
-				    "use_commands":{"type":"array","items":{"type":"string"}}
+				    "rotate":{"type":"boolean","description":"Face the player who places it."},
+				    "tool":{"type":"string","enum":%s,"description":"The tool that mines it fast. With requires_tool (default true when tool is set), nothing drops without it."},
+				    "tier":{"type":"string","enum":%s,"description":"Pickaxe tier needed, e.g. iron for diamond-like ores."},
+				    "requires_tool":{"type":"boolean"},
+				    "drops":{"type":"array","items":{"type":"string"},"description":"Instead of itself, e.g. [\\"custom:ruby 1-2\\"]. Silk Touch still drops the block."},
+				    "xp":{"description":"Experience when mined: a number or [min, max]."},
+				    "storage":{"type":"integer","description":"Rows of inventory (1 to 6, a chest has 3); right-click opens it."},
+				    "power":{"type":"integer","description":"Redstone power it gives off, 0 to 15 (a redstone block is 15)."},
+				    "powered_commands":{"type":"array","items":{"type":"string"},"description":"Run at the block when it receives redstone power."},
+				    "unpowered_commands":{"type":"array","items":{"type":"string"},"description":"Run at the block when it loses redstone power."},
+				    "use_commands":{"type":"array","items":{"type":"string"},"description":"Run as the player who right-clicks it, at the block (~ ~ ~)."},
+				    "step_commands":{"type":"array","items":{"type":"string"},"description":"Run as whatever steps on it (@s), at most once a second each."},
+				    "random_tick_commands":{"type":"array","items":{"type":"string"},"description":"Run at the block (~ ~ ~) on random ticks, about once a minute; e.g. grow: setblock ~ ~1 ~ custom:crystal keep."},
+				    "fuel_seconds":{"type":"number","description":"Burns in a furnace this long."},
+				    "generate":{"type":"object","description":"Generate it as ore veins in the world: in new chunks and in loaded chunks near players that don't have it yet.","properties":{
+				      "replace":{"type":"array","items":{"type":"string"},"description":"Blocks or #tags it may replace. Default: stone and deepslate (#minecraft:stone_ore_replaceables, #minecraft:deepslate_ore_replaceables). netherrack for the Nether."},
+				      "min_y":{"type":"integer"},"max_y":{"type":"integer"},
+				      "veins_per_chunk":{"type":"integer","description":"Default 6; iron is about 10, diamonds about 4."},
+				      "vein_size":{"type":"integer","description":"Blocks per vein, default 6."},
+				      "biomes":{"type":"array","items":{"type":"string"}},
+				      "dimension":{"type":"string","description":"Default minecraft:overworld."}}},
+				    "recipes":%s
 				  }}
-				},"required":["id","name","palette"]}""".formatted(new com.google.gson.Gson().toJson(CustomBlocks.SOUNDS)),
+				},"required":["id","name","palette"]}""".formatted(json(CustomBlocks.SOUNDS), json(CustomBlocks.TOOLS), json(CustomItems.TIERS), RECIPES_SCHEMA),
 			this::defineBlock);
 
 		register("define_entity",
@@ -493,7 +544,11 @@ public class GameTools {
 				+ "its layers start: the minimum corner) and pivot (the point it rotates around: a hip, shoulder, neck or wing "
 				+ "root; default the top center of the part). One palette of #RRGGBB / #AARRGGBB colors is shared by all parts. "
 				+ "scale is voxels per block (default 16, like vanilla mobs: a pig is about 14 long and 14 tall). The hitbox "
-				+ "comes from the model. Up to " + EntityModel.MAX_PARTS + " parts and " + EntityModel.MAX_SPAN + " voxels per side.",
+				+ "comes from the model. Up to " + EntityModel.MAX_PARTS + " parts and " + EntityModel.MAX_SPAN + " voxels per side. "
+				+ "properties make it a real mob: stats and behavior, walking, flying, swimming or hopping, food it follows "
+				+ "and breeds with (babies grow up), taming (tamed ones follow, sit when their owner right-clicks, and defend "
+				+ "them), riding, ranged attacks, timed abilities, commands when it attacks, is hurt or dies, natural "
+				+ "spawning in biomes, and recipes for its spawn egg. give_item with its id gives its spawn egg." + commandsNote,
 			"""
 				{"type":"object","properties":{
 				  "id":{"type":"string","description":"Lowercase letters, digits and underscores, e.g. frost_wolf."},
@@ -513,27 +568,54 @@ public class GameTools {
 				    "speed":{"type":"number","description":"Default 0.25 (a pig); 0.35 is quick."},
 				    "behavior":{"type":"string","enum":["passive","neutral","hostile"],"description":"passive flees when hurt, neutral fights back, hostile hunts players."},
 				    "attack_damage":{"type":"number"},
-				    "movement":{"type":"string","enum":["walk","fly"]},
+				    "movement":{"type":"string","enum":%s,"description":"swim creatures live in water; hop ones bounce along like rabbits."},
 				    "sounds":{"type":"string","description":"Borrow a vanilla mob's sounds, e.g. pig, wolf, parrot, zombie."},
 				    "drops":{"type":"array","items":{"type":"string"},"description":"e.g. \\"minecraft:bone 0-2\\", \\"custom:ruby\\"."},
-				    "interact_commands":{"type":"array","items":{"type":"string"},"description":"Run as the player when they right-click it, at the creature (~ ~ ~)."}
+				    "food":{"type":"array","items":{"type":"string"},"description":"Items it follows and breeds with (feed two adults to get a baby), and that heal it once tamed, e.g. [\\"minecraft:wheat\\"]."},
+				    "tame":{"type":"object","description":"Make it tamable: feed it these until it's tamed (chance per item, default 0.33).","properties":{
+				      "items":{"type":"array","items":{"type":"string"}},"chance":{"type":"number"}}},
+				    "rideable":{"type":"boolean","description":"Players (its owner, if tamable) ride it by right-clicking; it goes where they look. Flying mounts climb with jump."},
+				    "ranged":{"type":"object","description":"Attack from range instead of melee (neutral or hostile).","properties":{
+				      "projectile":{"type":"string","description":"arrow, fireball, small_fireball, wind_charge, or an item id like minecraft:snowball or custom:<id> that flies as that item."},
+				      "damage":{"type":"number"},"speed":{"type":"number"},"interval_seconds":{"type":"number","description":"Default 2."},
+				      "range":{"type":"number","description":"Default 16 blocks."},"gravity":{"type":"boolean"},
+				      "hit_commands":{"type":"array","items":{"type":"string"}}}},
+				    "abilities":{"type":"array","description":"Commands it runs every so often, as itself (@s) where it stands; @target is what it's fighting.","items":{"type":"object","properties":{
+				      "every_seconds":{"type":"number"},"when":{"type":"string","enum":["always","fighting","idle"]},
+				      "commands":{"type":"array","items":{"type":"string"}}}}},
+				    "attack_commands":{"type":"array","items":{"type":"string"},"description":"Run as the creature when its melee attack lands; @target and ~ ~ ~ are the victim."},
+				    "hurt_commands":{"type":"array","items":{"type":"string"},"description":"Run as the creature when it's hurt; @target is the attacker."},
+				    "death_commands":{"type":"array","items":{"type":"string"},"description":"Run as the creature when it dies; @target is the killer."},
+				    "interact_commands":{"type":"array","items":{"type":"string"},"description":"Run as the player when they right-click it, at the creature (~ ~ ~); @target is the creature."},
+				    "spawning":{"type":"object","description":"Appear naturally near players.","properties":{
+				      "biomes":{"type":"array","items":{"type":"string"},"description":"Biome ids or #tags, e.g. minecraft:plains, #minecraft:is_forest. Default: any overworld biome."},
+				      "where":{"type":"string","enum":%s,"description":"Default from movement."},
+				      "time":{"type":"string","enum":%s,"description":"Default night for hostile, any otherwise."},
+				      "chance":{"type":"number","description":"Chance per player every 2 seconds, default 0.1."},
+				      "group":{"type":"array","items":{"type":"integer"},"description":"[min, max], default [1, 3]."},
+				      "max_nearby":{"type":"integer","description":"Default 6 within 64 blocks."}}},
+				    "recipes":%s
 				  }}
-				},"required":["id","name","palette","parts"]}""",
+				},"required":["id","name","palette","parts"]}""".formatted(json(CustomEntities.MOVEMENTS), json(CreatureSpawning.WHERE),
+				json(CreatureSpawning.TIMES), RECIPES_SCHEMA),
 			this::defineEntity);
 
 		register("spawn_entity",
-			"Spawn custom creatures made with define_entity. Default: one, 3 blocks in front of the requesting player.",
+			"Spawn custom creatures made with define_entity. Default: one, 3 blocks in front of the requesting player. "
+				+ "(In commands, summon custom:<id> works too.)",
 			"""
 				{"type":"object","properties":{
 				  "id":{"type":"string"},
 				  "count":{"type":"integer","description":"1 to 20."},
+				  "baby":{"type":"boolean","description":"Spawn babies (they grow up in about 20 minutes)."},
+				  "tamed_by":{"type":"string","description":"Spawn already tamed by this player (tamable creatures)."},
 				  "position":%s,
 				  "dimension":%s
 				},"required":["id"]}""".formatted(POS_SCHEMA, DIM_SCHEMA),
 			this::spawnEntity);
 
 		register("give_item",
-			"Give a player copies of a custom item or block made with define_item or define_block.",
+			"Give a player copies of a custom item or block, or a custom creature's spawn egg. (In commands, give @s custom:<id> works too.)",
 			"""
 				{"type":"object","properties":{
 				  "id":{"type":"string"},
@@ -551,6 +633,32 @@ public class GameTools {
 				  "views":{"type":"array","items":{"type":"string","enum":["southeast","southwest","northwest","northeast","top"]}}
 				},"required":["id"]}""",
 			this::viewItem);
+
+		register("list_definitions",
+			"List this world's custom items, blocks and creatures (id, name and what they do, including recipes), and the "
+				+ "designs saved in the library that any world can load.",
+			"""
+				{"type":"object","properties":{
+				  "id":{"type":"string","description":"Show one definition in full (its whole JSON) instead of the list."}
+				}}""",
+			this::listDefinitions);
+
+		register("delete_definition",
+			"Delete a custom item, block or creature from this world. Copies that exist stay but look like a missing "
+				+ "texture and do nothing until something with that id is defined again; its recipes go away.",
+			"""
+				{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}""",
+			this::deleteDefinition);
+
+		register("library",
+			"The design library shared by every world on this computer. save copies a definition from this world into it; "
+				+ "load copies one from it into this world (replacing any with the same id); list shows what's in it.",
+			"""
+				{"type":"object","properties":{
+				  "action":{"type":"string","enum":["save","load","list"]},
+				  "id":{"type":"string"}
+				},"required":["action"]}""",
+			this::library);
 
 		register("scan_area",
 			"Read the blocks in a box (inclusive corners) in the same layer/row/palette format place_blueprint uses, "
@@ -886,13 +994,19 @@ public class GameTools {
 
 	/** Run commands in order as the player (or the server, if null) at the configured permission level. Server thread. */
 	String execute(ServerPlayer p, List<String> cmds) {
-		CommandSourceStack base = (p != null ? p.createCommandSourceStack() : server.createCommandSourceStack())
+		return execute(p != null ? p.createCommandSourceStack() : server.createCommandSourceStack(), cmds);
+	}
+
+	/** Run commands from a source at the configured permission level. custom:<id> works in them (see CommandRewriter). */
+	String execute(CommandSourceStack source, List<String> cmds) {
+		CommandSourceStack base = source
 			.withPermission(LevelBasedPermissionSet.forLevel(PermissionLevel.byId(Math.max(0, Math.min(4, cfg.commandPermissionLevel)))));
+		CommandRewriter.Items customItems = CustomItems.commandItems(server);
 
 		StringBuilder sb = new StringBuilder();
 		int failures = 0;
 		for (int i = 0; i < cmds.size(); i++) {
-			String cmd = cmds.get(i).trim();
+			String cmd = CommandRewriter.rewrite(cmds.get(i).trim(), CustomItems.DEFS::get, customItems);
 			List<String> out = new ArrayList<>();
 			boolean[] result = {false, false}; // [called, success]
 			int[] value = {0};
@@ -1335,9 +1449,90 @@ public class GameTools {
 
 	// ---------------------------------------------------------------- custom items
 
-	private String defineItem(JsonObject args) throws ToolError {
+	private static String json(List<String> values) {
+		return new com.google.gson.Gson().toJson(values);
+	}
+
+	private static final String SHOOT_SCHEMA = """
+		{"type":"object","description":"Right-click shoots: a bow, wand, blaster or throwable.","properties":{
+		  "projectile":{"type":"string","description":"arrow, fireball, small_fireball, wind_charge, self (throws the item itself, using one up, like a snowball or spear), or an item id like minecraft:snowball or custom:<id> that flies as that item."},
+		  "damage":{"type":"number","description":"Damage on hit (an arrow from a full bow does about 9)."},
+		  "speed":{"type":"number","description":"Default 2.5 for arrows, 1.5 otherwise."},
+		  "gravity":{"type":"boolean","description":"false: item projectiles fly straight, like magic bolts."},
+		  "ammo":{"type":"string","description":"Item used up per shot, e.g. minecraft:arrow or custom:<id>. Creative players need none."},
+		  "hit_commands":{"type":"array","items":{"type":"string"},"description":"Item projectiles: run as the shooter where it lands; @target is what it hit."}
+		}}""";
+
+	private static final String RECIPES_SCHEMA = """
+		{"type":"array","description":"Ways to make this (the creature's spawn egg, for creatures). Ingredients are item ids, #tags or custom:<id>.","items":{"type":"object","properties":{
+		  "type":{"type":"string","enum":["shaped","shapeless","smelting","blasting","smoking","campfire_cooking","stonecutting"]},
+		  "pattern":{"type":"array","items":{"type":"string"},"description":"shaped: up to 3 rows of up to 3 characters; space is an empty slot."},
+		  "key":{"type":"object","additionalProperties":{"type":"string"},"description":"shaped: character -> ingredient."},
+		  "ingredients":{"type":"array","items":{"type":"string"},"description":"shapeless: 1 to 9 ingredients."},
+		  "ingredient":{"type":"string","description":"smelting, blasting, smoking, campfire_cooking, stonecutting: the input."},
+		  "count":{"type":"integer","description":"How many it makes (crafting and stonecutting)."},
+		  "xp":{"type":"number","description":"Cooking: experience, e.g. 0.7 for iron."},
+		  "seconds":{"type":"number","description":"Cooking time; default 10 (smelting)."}
+		},"required":["type"]}}""";
+
+	private static String checkId(JsonObject args) throws ToolError {
 		String id = args.has("id") ? args.get("id").getAsString() : "";
 		if (!id.matches("[a-z0-9_]{1,40}")) throw new ToolError("id must be 1 to 40 lowercase letters, digits or underscores");
+		return id;
+	}
+
+	private static void oneOf(JsonObject o, String key, List<String> allowed, String what) throws ToolError {
+		if (o.has(key) && !allowed.contains(o.get(key).getAsString())) throw new ToolError(what + " must be one of " + String.join(", ", allowed));
+	}
+
+	private static JsonObject obj(JsonObject o, String key) throws ToolError {
+		if (!o.has(key)) return null;
+		if (!o.get(key).isJsonObject()) throw new ToolError(key + " must be an object");
+		return o.getAsJsonObject(key);
+	}
+
+	/** Check that every drop entry names a real item. */
+	private static void checkDrops(JsonObject props) throws ToolError {
+		for (String d : CustomItems.strings(props, "drops")) {
+			String item = d.trim().split("\\s+")[0];
+			if (CustomEntities.dropStack(item, 1) == null) throw new ToolError("Unknown drop item " + item);
+		}
+	}
+
+	/** Check item lists like food or ammo name real items. */
+	private void checkItems(List<String> items, String what) throws ToolError {
+		for (String s : items) {
+			try {
+				CustomRecipes.ingredient(server, s);
+			} catch (IllegalArgumentException e) {
+				throw new ToolError(what + ": " + e.getMessage());
+			}
+		}
+	}
+
+	/** Turn every recipe into vanilla recipe JSON now, so mistakes come back to Claude instead of failing on reload. */
+	private void checkRecipes(JsonObject def) throws ToolError {
+		JsonObject p = CustomItems.props(def);
+		if (!p.has("recipes")) return;
+		if (!p.get("recipes").isJsonArray()) throw new ToolError("recipes must be a list");
+		int i = 0;
+		for (JsonElement e : p.getAsJsonArray("recipes")) {
+			i++;
+			try {
+				CustomRecipes.toJson(server, def, e.getAsJsonObject());
+			} catch (RuntimeException ex) {
+				throw new ToolError("Recipe " + i + ": " + ex.getMessage());
+			}
+		}
+	}
+
+	private static String recipeNote(JsonObject def) {
+		JsonObject p = CustomItems.props(def);
+		return p.has("recipes") ? " Its recipes are loading (the server reloads its data for a moment)." : "";
+	}
+
+	private String defineItem(JsonObject args) throws ToolError {
+		String id = checkId(args);
 		String style = args.has("style") ? args.get("style").getAsString() : "item";
 		if (!List.of("item", "handheld", "block").contains(style)) throw new ToolError("style must be item, handheld or block");
 		JsonObject model;
@@ -1357,9 +1552,27 @@ public class GameTools {
 			throw new ToolError("Bad model: " + e.getMessage());
 		}
 		JsonObject props = args.has("properties") ? args.getAsJsonObject("properties") : new JsonObject();
-		if (props.has("rarity") && !List.of("common", "uncommon", "rare", "epic").contains(props.get("rarity").getAsString())) {
-			throw new ToolError("rarity must be common, uncommon, rare or epic");
+		oneOf(props, "rarity", List.of("common", "uncommon", "rare", "epic"), "rarity");
+		JsonObject tool = obj(props, "tool");
+		if (tool != null) {
+			oneOf(tool, "type", CustomItems.TOOL_TYPES, "tool.type");
+			oneOf(tool, "tier", CustomItems.TIERS, "tool.tier");
 		}
+		JsonObject armor = obj(props, "armor");
+		if (armor != null) {
+			oneOf(armor, "slot", CustomItems.ARMOR_SLOTS, "armor.slot");
+			oneOf(armor, "look", CustomItems.ARMOR_LOOKS, "armor.look");
+			if (armor.has("look") && armor.get("look").getAsString().equals("model") && armor.has("slot") && !armor.get("slot").getAsString().equals("head")) {
+				throw new ToolError("armor.look model only works on the head; use leather (tinted with color) or another vanilla look for other slots");
+			}
+		}
+		JsonObject shoot = obj(props, "shoot");
+		if (shoot != null) {
+			String bad = CustomProjectiles.validate(shoot);
+			if (bad != null) throw new ToolError(bad);
+			if (shoot.has("ammo")) checkItems(List.of(shoot.get("ammo").getAsString()), "shoot.ammo");
+		}
+		if (props.has("repair_with")) checkItems(CustomItems.strings(props, "repair_with"), "repair_with");
 
 		JsonObject def = new JsonObject();
 		def.addProperty("id", id);
@@ -1368,18 +1581,18 @@ public class GameTools {
 		def.addProperty("style", style);
 		def.add("model", model);
 		def.add("properties", props);
-		if (CustomBlocks.isBlock(CustomItems.DEFS.get(id))) throw new ToolError(id + " is already a custom block; pick another id");
-		boolean existed = CustomItems.DEFS.containsKey(id);
+		JsonObject old = CustomItems.DEFS.get(id);
+		if (old != null && (CustomBlocks.isBlock(old) || CustomEntities.isEntity(old))) throw new ToolError(id + " is already a custom block or creature; pick another id");
+		checkRecipes(def);
 		CustomItems.define(server, def);
-		return (existed ? "Updated" : "Defined") + " custom item " + id + " (" + parsed.sx + "x" + parsed.sy + "x" + parsed.sz
-			+ " voxels). Hand it out with give_item, or check it with view_item.";
+		return (old != null ? "Updated" : "Defined") + " custom item " + id + " (" + parsed.sx + "x" + parsed.sy + "x" + parsed.sz
+			+ " voxels). Hand it out with give_item, or check it with view_item." + recipeNote(def);
 	}
 
 	private String defineBlock(JsonObject args) throws ToolError {
-		String id = args.has("id") ? args.get("id").getAsString() : "";
-		if (!id.matches("[a-z0-9_]{1,40}")) throw new ToolError("id must be 1 to 40 lowercase letters, digits or underscores");
+		String id = checkId(args);
 		JsonObject old = CustomItems.DEFS.get(id);
-		if (old != null && !CustomBlocks.isBlock(old)) throw new ToolError(id + " is already a custom item; pick another id");
+		if (old != null && !CustomBlocks.isBlock(old)) throw new ToolError(id + " is already a custom item or creature; pick another id");
 		JsonObject model = new JsonObject();
 		model.add("palette", args.get("palette"));
 		if (args.has("faces")) model.add("faces", args.get("faces"));
@@ -1393,14 +1606,20 @@ public class GameTools {
 		}
 		if (parsed.sx > 16 || parsed.sy > 16 || parsed.sz > 16) throw new ToolError("Blocks are at most 16 voxels per side");
 		JsonObject props = args.has("properties") ? args.getAsJsonObject("properties") : new JsonObject();
-		if (props.has("sound") && !CustomBlocks.SOUNDS.contains(props.get("sound").getAsString())) {
-			throw new ToolError("sound must be one of " + String.join(", ", CustomBlocks.SOUNDS));
-		}
-		if (props.has("collision") && !List.of("model", "full", "none").contains(props.get("collision").getAsString())) {
-			throw new ToolError("collision must be model, full or none");
+		oneOf(props, "sound", CustomBlocks.SOUNDS, "sound");
+		oneOf(props, "collision", List.of("model", "full", "none"), "collision");
+		oneOf(props, "tool", CustomBlocks.TOOLS, "tool");
+		oneOf(props, "tier", CustomItems.TIERS, "tier");
+		checkDrops(props);
+		JsonObject gen = obj(props, "generate");
+		if (gen != null) {
+			for (String r : CustomItems.strings(gen, "replace")) {
+				boolean ok = r.startsWith("#") || BuiltInRegistries.BLOCK.containsKey(net.minecraft.resources.Identifier.tryParse(r.contains(":") ? r : "minecraft:" + r));
+				if (!ok) throw new ToolError("generate.replace: unknown block " + r);
+			}
 		}
 		int slot = CustomBlocks.allocateSlot(id);
-		if (slot < 0) throw new ToolError("This world already has " + CustomBlocks.SLOTS + " custom blocks; redefine an existing one instead");
+		if (slot < 0) throw new ToolError("This world already has " + CustomBlocks.SLOTS + " custom blocks; redefine or delete one instead");
 
 		JsonObject def = new JsonObject();
 		def.addProperty("id", id);
@@ -1411,14 +1630,15 @@ public class GameTools {
 		def.addProperty("style", "block");
 		def.add("model", model);
 		def.add("properties", props);
+		checkRecipes(def);
 		CustomItems.define(server, def);
 		return (old != null ? "Updated" : "Defined") + " custom block " + id + ". Place it as custom:" + id
-			+ " with any placement tool, or give it with give_item.";
+			+ " with any placement tool, or give it with give_item."
+			+ (gen != null ? " Its ore veins appear in chunks around players over the next few seconds." : "") + recipeNote(def);
 	}
 
 	private String defineEntity(JsonObject args) throws ToolError {
-		String id = args.has("id") ? args.get("id").getAsString() : "";
-		if (!id.matches("[a-z0-9_]{1,40}")) throw new ToolError("id must be 1 to 40 lowercase letters, digits or underscores");
+		String id = checkId(args);
 		JsonObject old = CustomItems.DEFS.get(id);
 		if (old != null && !CustomEntities.isEntity(old)) throw new ToolError(id + " is already a custom item or block; pick another id");
 		JsonObject model = new JsonObject();
@@ -1432,11 +1652,24 @@ public class GameTools {
 			throw new ToolError("Bad model: " + e.getMessage());
 		}
 		JsonObject props = args.has("properties") ? args.getAsJsonObject("properties") : new JsonObject();
-		if (props.has("drops")) {
-			for (JsonElement e : props.getAsJsonArray("drops")) {
-				String drop = e.getAsString().trim().split("\\s+")[0];
-				if (CustomEntities.CustomEntity.dropStack(drop, 1) == null) throw new ToolError("Unknown drop item " + drop);
-			}
+		oneOf(props, "behavior", List.of("passive", "neutral", "hostile"), "behavior");
+		oneOf(props, "movement", CustomEntities.MOVEMENTS, "movement");
+		checkDrops(props);
+		checkItems(CustomItems.strings(props, "food"), "food");
+		JsonObject tame = obj(props, "tame");
+		if (tame != null) {
+			if (CustomItems.strings(tame, "items").isEmpty()) throw new ToolError("tame needs items to tame it with");
+			checkItems(CustomItems.strings(tame, "items"), "tame.items");
+		}
+		JsonObject ranged = obj(props, "ranged");
+		if (ranged != null) {
+			String bad = CustomProjectiles.validate(ranged);
+			if (bad != null) throw new ToolError(bad);
+		}
+		JsonObject spawning = obj(props, "spawning");
+		if (spawning != null) {
+			oneOf(spawning, "where", CreatureSpawning.WHERE, "spawning.where");
+			oneOf(spawning, "time", CreatureSpawning.TIMES, "spawning.time");
 		}
 		JsonObject def = new JsonObject();
 		def.addProperty("id", id);
@@ -1445,9 +1678,10 @@ public class GameTools {
 		def.addProperty("scale", scale);
 		def.add("model", model);
 		def.add("properties", props);
+		checkRecipes(def);
 		CustomItems.define(server, def);
-		return String.format(Locale.ROOT, "%s custom creature %s (%d parts, %.2f x %.2f blocks). Spawn it with spawn_entity, or check it with view_item.",
-			old != null ? "Updated" : "Defined", id, parsed.parts.size(), parsed.width(), parsed.height());
+		return String.format(Locale.ROOT, "%s custom creature %s (%d parts, %.2f x %.2f blocks). Spawn it with spawn_entity, give its spawn egg with give_item, or check it with view_item.%s",
+			old != null ? "Updated" : "Defined", id, parsed.parts.size(), parsed.width(), parsed.height(), recipeNote(def));
 	}
 
 	private String spawnEntity(JsonObject args) throws ToolError {
@@ -1466,8 +1700,12 @@ public class GameTools {
 			net.minecraft.world.phys.Vec3 look = p.getLookAngle().multiply(1, 0, 1).normalize().scale(3);
 			at = p.position().add(look);
 		}
-		int n = CustomEntities.spawn(level, def, at, count).size();
-		return String.format(Locale.ROOT, "Spawned %d %s at %.1f %.1f %.1f.", n, def.get("name").getAsString(), at.x, at.y, at.z);
+		ServerPlayer owner = args.has("tamed_by") ? player(args, "tamed_by") : null;
+		boolean baby = args.has("baby") && args.get("baby").getAsBoolean();
+		var spawned = CustomEntities.spawn(level, def, at, count, baby, false);
+		if (owner != null) for (var e : spawned) e.tame(owner);
+		return String.format(Locale.ROOT, "Spawned %d %s%s at %.1f %.1f %.1f%s.", spawned.size(), baby ? "baby " : "", def.get("name").getAsString(),
+			at.x, at.y, at.z, owner != null ? ", tamed by " + owner.getScoreboardName() : "");
 	}
 
 	/** How Claude names a block state: custom:<id> for custom blocks, the usual id[properties] otherwise. */
@@ -1494,13 +1732,86 @@ public class GameTools {
 
 	private String giveItem(JsonObject args) throws ToolError {
 		JsonObject def = itemDef(args);
-		if (CustomEntities.isEntity(def)) throw new ToolError(id(def) + " is a creature; use spawn_entity");
 		ServerPlayer p = player(args, "player");
 		if (p == null) throw new ToolError("No player to give it to");
 		ItemStack stack = CustomItems.stack(def, optInt(args, "count", 1));
 		int n = stack.getCount();
+		String what = CustomEntities.isEntity(def) ? def.get("name").getAsString() + " Spawn Egg" : def.get("name").getAsString();
 		if (!p.getInventory().add(stack)) p.drop(stack, false, net.minecraft.util.Prediction.SERVER_ONLY); // full inventory: drop it at their feet
-		return "Gave " + n + " " + def.get("name").getAsString() + " to " + p.getScoreboardName() + ".";
+		return "Gave " + n + " " + what + " to " + p.getScoreboardName() + ".";
+	}
+
+	// ---------------------------------------------------------------- managing definitions
+
+	private static String kind(JsonObject def) {
+		return CustomBlocks.isBlock(def) ? "block" : CustomEntities.isEntity(def) ? "creature" : "item";
+	}
+
+	/** One line per definition: id, kind, name and which properties it uses. */
+	private static String summary(JsonObject def) {
+		JsonObject p = CustomItems.props(def);
+		StringBuilder sb = new StringBuilder("- ").append(id(def)).append(" (").append(kind(def)).append("): ").append(def.get("name").getAsString());
+		if (!p.keySet().isEmpty()) sb.append(" [").append(String.join(", ", new java.util.TreeSet<>(p.keySet()))).append(']');
+		for (String r : CustomRecipes.describe(def)) sb.append("\n    recipe ").append(r);
+		return sb.toString();
+	}
+
+	private String listDefinitions(JsonObject args) throws ToolError {
+		if (args.has("id") && !args.get("id").getAsString().isBlank()) {
+			JsonObject def = itemDef(args);
+			JsonObject shown = def.deepCopy();
+			shown.remove("model"); // the picture is what view_item is for; this keeps the answer small
+			return new com.google.gson.GsonBuilder().disableHtmlEscaping().setPrettyPrinting().create().toJson(shown)
+				+ "\n(model omitted; use view_item to see it)";
+		}
+		StringBuilder sb = new StringBuilder();
+		List<JsonObject> defs = new ArrayList<>(CustomItems.DEFS.values());
+		defs.sort(java.util.Comparator.comparing(GameTools::kind).thenComparing(GameTools::id));
+		sb.append(defs.isEmpty() ? "This world has no custom items, blocks or creatures yet." : "This world's custom things:");
+		for (JsonObject def : defs) sb.append('\n').append(summary(def));
+		List<String> lib = Library.list();
+		sb.append("\nLibrary (load with library): ").append(lib.isEmpty() ? "empty" : String.join(", ", lib));
+		return sb.toString();
+	}
+
+	private String deleteDefinition(JsonObject args) throws ToolError {
+		JsonObject def = itemDef(args);
+		CustomItems.remove(server, id(def));
+		return "Deleted custom " + kind(def) + " " + id(def) + ".";
+	}
+
+	private String library(JsonObject args) throws ToolError {
+		String action = args.has("action") ? args.get("action").getAsString() : "list";
+		try {
+			switch (action) {
+				case "list" -> {
+					List<String> lib = Library.list();
+					return lib.isEmpty() ? "The library is empty." : "In the library: " + String.join(", ", lib);
+				}
+				case "save" -> {
+					JsonObject def = itemDef(args);
+					Library.save(def);
+					return "Saved " + id(def) + " to the library. Any world can load it now.";
+				}
+				case "load" -> {
+					String id = checkId(args);
+					JsonObject def = Library.load(id);
+					if (def == null) throw new ToolError("No " + id + " in the library. In it: " + String.join(", ", Library.list()));
+					JsonObject old = CustomItems.DEFS.get(id);
+					if (old != null && !kind(old).equals(kind(def))) throw new ToolError("This world already has a " + kind(old) + " called " + id);
+					if (CustomBlocks.isBlock(def)) {
+						int slot = CustomBlocks.allocateSlot(id);
+						if (slot < 0) throw new ToolError("This world already has " + CustomBlocks.SLOTS + " custom blocks");
+						def.addProperty("slot", slot);
+					}
+					CustomItems.define(server, def);
+					return "Loaded " + kind(def) + " " + id + " (" + def.get("name").getAsString() + ") from the library.";
+				}
+				default -> throw new ToolError("action must be save, load or list");
+			}
+		} catch (java.io.IOException e) {
+			throw new ToolError("Library problem: " + e.getMessage());
+		}
 	}
 
 	private CompletableFuture<Images> viewItem(JsonObject args) throws ToolError {

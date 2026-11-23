@@ -93,6 +93,12 @@ public class CustomEntitiesClientTest implements FabricClientGameTest {
 					e.setYRot(180); // face north, toward the camera
 					e.yBodyRot = e.yBodyRotO = e.yHeadRot = e.yHeadRotO = 180;
 				}
+				// A baby fox beside them, and the fox's spawn egg in hand.
+				var baby = CustomEntities.spawn(level, CustomItems.DEFS.get("frost_fox"), new Vec3(-0.8, y, 3.2), 1, true, false).getFirst();
+				baby.setNoAi(true);
+				baby.setYRot(180);
+				baby.yBodyRot = baby.yBodyRotO = baby.yHeadRot = baby.yHeadRotO = 180;
+				server.getPlayerList().getPlayers().getFirst().getInventory().setItem(8, CustomItems.stack(CustomItems.DEFS.get("frost_fox"), 1));
 			});
 			sp.getConnection().waitForChunksRender();
 			ctx.waitTicks(30);
