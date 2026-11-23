@@ -1,0 +1,20 @@
+{
+	"schemaVersion": 1,
+	"id": "claudecraft",
+	"version": "${version}",
+	"name": "ClaudeCraft",
+	"description": "Talk to Claude Code from Minecraft chat. Claude can build, run commands, and act in the world through an embedded MCP server.",
+	"authors": ["ClaudeCraft"],
+	"license": "MIT",
+	"icon": "assets/claudecraft/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": ["dev.claudecraft.ClaudeCraft"]
+	},
+	"depends": {
+		"fabricloader": ">=0.20.1",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}
