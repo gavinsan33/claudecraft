@@ -11,6 +11,8 @@ import dev.claudecraft.VoxelModel;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.model.loading.v1.ModelLoadingPlugin;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
+import dev.claudecraft.CustomEntities;
 import net.fabricmc.fabric.api.client.renderer.v1.mesh.MutableQuadView;
 import net.fabricmc.fabric.api.client.renderer.v1.mesh.QuadEmitter;
 import net.minecraft.client.Minecraft;
@@ -83,10 +85,15 @@ public class ClaudeCraftClient implements ClientModInitializer {
 	public void onInitializeClient() {
 		SpecialModelRenderers.ID_MAPPER.put(Identifier.fromNamespaceAndPath("claudecraft", "voxel"), VoxelRenderer.Unbaked.MAP_CODEC);
 		SelectItemModelProperties.ID_MAPPER.put(Identifier.fromNamespaceAndPath("claudecraft", "style"), StyleProperty.TYPE);
+		EntityRendererRegistry.register(CustomEntities.TYPE, CustomEntityRenderer::new);
 		CustomItems.onClientChange = blocks -> {
 			MESHES.clear();
 			BLOCK_MESHES.clear();
+			CustomEntityRenderer.PARTS.clear();
 			Minecraft mc = Minecraft.getInstance();
+			if (mc.level != null) {
+				for (var e : mc.level.entitiesForRendering()) if (e instanceof CustomEntities.CustomEntity) e.refreshDimensions(); // new hitbox sizes
+			}
 			if (blocks && mc.level != null && mc.levelRenderer.viewArea() != null) {
 				// Rebuild every loaded section so placed blocks pick up the new designs.
 				var area = mc.levelRenderer.viewArea();
@@ -103,9 +110,22 @@ public class ClaudeCraftClient implements ClientModInitializer {
 
 	record Mesh(List<VoxelModel.Quad> opaque, List<VoxelModel.Quad> translucent) {
 		static Mesh of(VoxelModel m) {
-			List<VoxelModel.Quad> all = m.mesh(false);
+			return split(m.mesh(false));
+		}
+
+		static Mesh split(List<VoxelModel.Quad> all) {
 			return new Mesh(all.stream().filter(q -> !q.translucent()).toList(), all.stream().filter(VoxelModel.Quad::translucent).toList());
 		}
+	}
+
+	static Mesh missingMesh() {
+		return MISSING;
+	}
+
+	/** Draw a mesh at the current pose with entity lighting: opaque faces, then see-through ones. */
+	static void submitMesh(PoseStack pose, SubmitNodeCollector collector, Mesh m, int light, int overlay) {
+		if (!m.opaque().isEmpty()) VoxelRenderer.submit(pose, collector, RenderTypes.entityCutout(WHITE), m.opaque(), light, overlay);
+		if (!m.translucent().isEmpty()) VoxelRenderer.submit(pose, collector, RenderTypes.entityTranslucent(WHITE), m.translucent(), light, overlay);
 	}
 
 	private static Mesh mesh(String id) {
@@ -127,9 +147,7 @@ public class ClaudeCraftClient implements ClientModInitializer {
 
 		@Override
 		public void submit(String id, PoseStack pose, SubmitNodeCollector collector, int light, int overlay, boolean foil, int outlineColor) {
-			Mesh m = mesh(id);
-			if (!m.opaque().isEmpty()) submit(pose, collector, RenderTypes.entityCutout(WHITE), m.opaque(), light, overlay);
-			if (!m.translucent().isEmpty()) submit(pose, collector, RenderTypes.entityTranslucent(WHITE), m.translucent(), light, overlay);
+			submitMesh(pose, collector, mesh(id), light, overlay);
 		}
 
 		private static void submit(PoseStack pose, SubmitNodeCollector collector, RenderType type, List<VoxelModel.Quad> quads, int light, int overlay) {

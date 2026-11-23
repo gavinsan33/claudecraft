@@ -216,7 +216,15 @@ public final class VoxelModel {
 	 */
 	public List<Quad> mesh(boolean block) {
 		float unit = 1f / (block ? 16 : Math.max(16, Math.max(sx, Math.max(sy, sz))));
-		float[] off = {(1 - sx * unit) / 2, block ? 0 : (1 - sy * unit) / 2, (1 - sz * unit) / 2};
+		return mesh(unit, new float[]{(1 - sx * unit) / 2, block ? 0 : (1 - sy * unit) / 2, (1 - sz * unit) / 2}, block);
+	}
+
+	/** Faces with each voxel `unit` wide and the model's minimum corner at (ox, oy, oz). Nothing is marked for culling. */
+	public List<Quad> mesh(float unit, float ox, float oy, float oz) {
+		return mesh(unit, new float[]{ox, oy, oz}, false);
+	}
+
+	private List<Quad> mesh(float unit, float[] off, boolean block) {
 		int[] size = {sx, sy, sz};
 		List<Quad> quads = new ArrayList<>();
 		for (int f = 0; f < 6; f++) {

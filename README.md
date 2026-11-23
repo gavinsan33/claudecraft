@@ -36,20 +36,24 @@ Claude's replies ◄── stream-json ◄─┘
 | `wait_for_builds` | Wait for queued builds to finish and get their results |
 | `define_item` | Invent a custom item: a voxel model (pixel art or 3D) plus behavior (damage, food, durability, right-click commands...) that every player sees instantly |
 | `define_block` | Invent a custom block: a painted cube like a vanilla block, or a small voxel shape, with light, hardness, sound, collision and right-click commands |
+| `define_entity` | Invent a custom creature: animated voxel parts (head, legs, wings, tail...) plus health, speed, behavior, flying, sounds, drops and right-click commands |
+| `spawn_entity` | Spawn custom creatures |
 | `give_item` | Give a player a custom item or block |
-| `view_item` | Picture of a custom item's or block's model |
+| `view_item` | Picture of a custom item's, block's or creature's model |
 | `run_commands` | Any command, run as the requesting player (`@s`, `~`), at a capped permission level |
 | `undo` | Revert the last turn's block changes |
 
 Any `block` argument, and blueprint palette entries, can be a WorldEdit-style random mix such as `70%stone_bricks,30%mossy_stone_bricks`. Every placement tool also takes a WorldEdit-style `mask` that limits which blocks it may change, such as `minecraft:air` (never overwrite anything), `#minecraft:logs`, or `!#existing >#solid` (air resting on solid ground). Masks are checked as each block goes down.
 
-### Custom items and blocks
+### Custom items, blocks and creatures
 
 Claude can invent items that don't exist in Minecraft and hand them out on the spot: a frost sword, a healing berry, a teleport wand. Each one is a voxel model Claude designs (16x16 pixel art like vanilla items, or a small 3D model) plus behavior: melee damage, food, durability, stack size, glint, rarity, and commands that run on right-click. Definitions are saved with the world and sent to every player as soon as they're made, so new items appear instantly with no resource pack or restart.
 
 Custom blocks work the same way: Claude paints a cube's faces like a vanilla 16x16 texture, or sculpts a smaller shape (a lamp, a crystal), and sets its light, hardness, sound, collision and right-click commands. They're drawn straight into the world's chunk meshes like vanilla blocks, and Claude can use them anywhere in its building tools as `custom:<id>`. Redefining a block redraws every copy already placed.
 
-Under the hood there's one registered item, `claudecraft:custom_item`, and each stack names its definition in a `claudecraft:definition` component, because Minecraft can't register new items while it runs. You can also give one with `/give @s claudecraft:custom_item[claudecraft:definition="ruby"]`, though `give_item` also applies the item's behavior. Blocks are one registered block, `claudecraft:custom_block`, with a numbered `variant` state per design (up to 256 per world).
+Creatures are built from voxel parts that the client animates by role: heads follow where the creature looks, legs and arms swing as it walks, wings flap, tails sway. Each one has its own health, speed, behavior (passive, neutral or hostile), walking or flying, sounds borrowed from a vanilla mob, drops, and commands that run when a player right-clicks it. Redefining a creature updates the ones already spawned.
+
+Under the hood there's one registered item, `claudecraft:custom_item`, and each stack names its definition in a `claudecraft:definition` component, because Minecraft can't register new items while it runs. You can also give one with `/give @s claudecraft:custom_item[claudecraft:definition="ruby"]`, though `give_item` also applies the item's behavior. Blocks are one registered block, `claudecraft:custom_block`, with a numbered `variant` state per design (up to 256 per world), and creatures are one entity type, `claudecraft:custom_entity`, that stores its definition (`/summon claudecraft:custom_entity ~ ~ ~ {Definition:"frost_fox"}` works too).
 
 ### Builds you can watch
 

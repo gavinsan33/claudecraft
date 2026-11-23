@@ -108,6 +108,7 @@ public final class CustomItems {
 		ResourceKey<Item> key = ResourceKey.create(Registries.ITEM, id("custom_item"));
 		ITEM = Registry.register(BuiltInRegistries.ITEM, key, new CustomItem(new Item.Properties().setId(key)));
 		CustomBlocks.register();
+		CustomEntities.register();
 		PayloadTypeRegistry.clientboundPlay().registerLarge(DefinitionsPayload.TYPE, DefinitionsPayload.CODEC, MAX_PAYLOAD);
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> sender.sendPacket(payload(DEFS.values(), true)));
 	}
@@ -125,13 +126,13 @@ public final class CustomItems {
 		} catch (Exception e) {
 			ClaudeCraft.LOGGER.error("Couldn't read custom item definitions from {}", saveFile, e);
 		}
-		CustomBlocks.definitionsChanged();
+		changed();
 	}
 
 	/** Add or replace a definition, save it, and send it to everyone online. Server thread. */
 	static void define(MinecraftServer server, JsonObject def) {
 		DEFS.put(def.get("id").getAsString(), def);
-		CustomBlocks.definitionsChanged();
+		changed();
 		JsonObject all = new JsonObject();
 		DEFS.forEach(all::add);
 		try {
@@ -140,8 +141,20 @@ public final class CustomItems {
 		} catch (Exception e) {
 			ClaudeCraft.LOGGER.error("Couldn't save custom item definitions to {}", saveFile, e);
 		}
+		if (CustomEntities.isEntity(def)) {
+			// Creatures already in the world take on the new size and stats.
+			String id = def.get("id").getAsString();
+			for (var level : server.getAllLevels()) for (var e : level.getAllEntities()) {
+				if (e instanceof CustomEntities.CustomEntity ce && ce.definitionId().equals(id)) ce.applyDefinition(false);
+			}
+		}
 		DefinitionsPayload p = payload(List.of(def), false);
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) ServerPlayNetworking.send(player, p);
+	}
+
+	private static void changed() {
+		CustomBlocks.definitionsChanged();
+		CustomEntities.definitionsChanged();
 	}
 
 	private static DefinitionsPayload payload(java.util.Collection<JsonObject> defs, boolean replaceAll) {
@@ -162,7 +175,7 @@ public final class CustomItems {
 		}
 		// Not clear() first: in singleplayer the server reads this same map from its own thread.
 		if (p.replaceAll()) DEFS.keySet().retainAll(ids);
-		CustomBlocks.definitionsChanged();
+		changed();
 		onClientChange.accept(blocks);
 	}
 
