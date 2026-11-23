@@ -1,14 +1,11 @@
 package dev.claudecraft;
 
-import net.minecraft.ChatFormatting;
 import net.minecraft.commands.arguments.blocks.BlockStateParser;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.particles.BlockParticleOption;
 import net.minecraft.core.particles.ParticleTypes;
-import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.Clearable;
 import net.minecraft.world.level.block.Block;
@@ -43,27 +40,29 @@ public final class BuildJob {
 	private final Map<BlockPos, BlockState> targets;
 	private final List<BlockPos> order;
 	private final UndoHistory undo;
-	private final String viewer;
 	private final boolean effects;
-	private final int rate;
+	private final double rate;
+	private final java.util.function.Consumer<String> onFinish;
 	final CompletableFuture<String> done = new CompletableFuture<>();
 
 	private final List<BlockPos> placed = new ArrayList<>();
 	private final Set<BlockPos> placedSet = new HashSet<>();
 	private int index, unchanged, outside, ticks;
+	private double credit;
 	private boolean rushing;
 
 	/**
-	 * @param blocksPerTick placement speed; Integer.MAX_VALUE places everything in one tick
-	 * @param viewer player who sees the progress in their action bar, may be null
+	 * @param blocksPerTick placement speed, may be fractional; Integer.MAX_VALUE places everything in one tick
+	 * @param onFinish gets the result report before {@link #done} completes, may be null
 	 */
-	public BuildJob(ServerLevel level, Map<BlockPos, BlockState> targets, UndoHistory undo, int blocksPerTick, boolean effects, String viewer) {
+	public BuildJob(ServerLevel level, Map<BlockPos, BlockState> targets, UndoHistory undo, double blocksPerTick, boolean effects,
+			java.util.function.Consumer<String> onFinish) {
+		this.onFinish = onFinish;
 		this.level = level;
 		this.targets = targets;
 		this.undo = undo;
-		this.rate = Math.max(1, blocksPerTick);
+		this.rate = Math.max(0.01, blocksPerTick);
 		this.effects = effects;
-		this.viewer = viewer;
 		this.order = buildOrder(targets);
 	}
 
@@ -88,10 +87,20 @@ public final class BuildJob {
 		return order.size();
 	}
 
-	/** Place up to {@code rate} blocks (or {@code budget}, if smaller). Runs on the server thread. */
-	public void tick(int budget) {
+	public int remaining() {
+		return order.size() - index;
+	}
+
+	/** Estimated ticks left at this job's pace. */
+	public double ticksLeft() {
+		return remaining() / rate;
+	}
+
+	/** Place about {@code rate} blocks. Runs on the server thread. */
+	public void tick() {
 		if (!rushing) ticks++;
-		int limit = rushing ? Integer.MAX_VALUE : Math.min(rate, budget);
+		credit = Math.min(credit + rate, Integer.MAX_VALUE);
+		int limit = rushing ? Integer.MAX_VALUE : (int) credit;
 		List<BlockPos> thisTick = new ArrayList<>();
 		List<BlockState> oldStates = new ArrayList<>();
 		while (index < order.size() && thisTick.size() < limit) {
@@ -116,14 +125,8 @@ public final class BuildJob {
 			oldStates.add(old);
 			connectLive(pos);
 		}
+		credit -= thisTick.size();
 		if (effects && !rushing && !thisTick.isEmpty()) playEffects(thisTick, oldStates);
-		if (viewer != null && !rushing && ticks % 10 == 0 && !isFinished()) {
-			ServerPlayer p = level.getServer().getPlayerList().getPlayerByName(viewer);
-			if (p != null) {
-				int pct = (int) (100L * index / Math.max(1, order.size()));
-				p.sendSystemMessage(Component.literal("Claude is building... " + pct + "%").withStyle(ChatFormatting.GRAY), true);
-			}
-		}
 	}
 
 	/** Update the shape of a newly placed block and its placed neighbors, but never remove anything yet. */
@@ -171,7 +174,7 @@ public final class BuildJob {
 	/** Place whatever is left immediately, run the final shape pass, and complete the future. */
 	public void finish(String note) {
 		rushing = true;
-		while (!isFinished()) tick(Integer.MAX_VALUE);
+		while (!isFinished()) tick();
 		complete(note);
 	}
 
@@ -215,6 +218,7 @@ public final class BuildJob {
 			for (int i = 0; i < Math.min(15, removed.size()); i++) sb.append("\n - ").append(removed.get(i));
 			if (removed.size() > 15) sb.append("\n - ...");
 		}
+		if (onFinish != null) onFinish.accept(sb.toString());
 		done.complete(sb.toString());
 	}
 }

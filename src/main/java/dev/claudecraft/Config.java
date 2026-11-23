@@ -36,7 +36,7 @@ public class Config {
 	public int maxBuildSeconds = 12;
 	/** Block sounds and particles while animating. */
 	public boolean buildEffects = true;
-	/** Show what Claude is doing (tool calls) in the action bar. */
+	/** Animated status line in the action bar while Claude works. */
 	public boolean showToolActivity = true;
 	/** Extra CLI args appended to every claude invocation, e.g. ["--effort", "high"]. */
 	public List<String> extraArgs = new ArrayList<>();

@@ -24,18 +24,25 @@ Claude's replies ◄── stream-json ◄─┘
 | `get_terrain` | Surface heightmap plus surface blocks for an area |
 | `scan_area` | Read blocks in a box, in the same format `place_blueprint` uses |
 | `place_blueprint` | Palette plus layered character grid. Claude's main way to build things it designed itself |
+| `draw_shape` | WorldEdit-style sphere, dome, cylinder (any axis), cone, pyramid, torus and polyline, solid or hollow |
+| `generate` | Fill a box wherever a math expression is true, like WorldEdit's `//generate` |
+| `clone_region` | Copy a box with rotation, mirroring and stacking (`//copy`, `//paste`, `//stack`) |
 | `fill_region` | Box fill: solid, hollow, outline or walls, with an optional replace filter |
 | `place_blocks` | Individual blocks at exact coordinates |
+| `wait_for_builds` | Wait for queued builds to finish and get their results |
 | `run_commands` | Any command, run as the requesting player (`@s`, `~`), at a capped permission level |
 | `undo` | Revert the last turn's block changes |
 
+Any `block` argument, and blueprint palette entries, can be a WorldEdit-style random mix such as `70%stone_bricks,30%mossy_stone_bricks`.
+
 ### Builds you can watch
 
-Claude starts building right away and works in stages: foundation, then walls, then roof, then details. It posts a short progress line in chat between stages and refines as it goes.
+Placement calls return immediately and the blocks animate in the background, one queued build after another, while Claude keeps designing. Claude queues the part it already knows first (the site, a foundation, the base of the legs), often with a longer animation, and works out the rest while that goes up, so players see progress right away.
 
-- **Animated placement.** Each stage goes up a few blocks at a time, bottom to top, sweeping each layer row by row like a 3D printer.
+- **Animated placement.** Each build goes up a few blocks at a time, bottom to top, sweeping each layer row by row like a 3D printer.
 - **Sounds and particles.** Every block plays its own placement sound at its position with a puff of particles. Clearing plays break sounds, top-down. Undo animates the same way.
-- **Pacing.** The default is 40 blocks a second. Big stages speed up so none takes longer than 12 seconds. The tool call returns when its stage is done, so Claude sees the result before deciding the next step.
+- **Pacing.** The default is 40 blocks a second, and big builds speed up so none takes longer than 12 seconds. Claude can set `duration_seconds` on any build to stretch it out while it designs the next part. Results, including any problems, come back with Claude's later tool calls, and Claude calls `wait_for_builds` before announcing it's done.
+- **Status line.** While Claude is working, the action bar shows a Claude Code-style orange spinner with what it's doing, the elapsed time and how many blocks are left: `✻ Building… (23s · 1,204 blocks to go)`.
 - **Correct shapes.** Fences, panes and stairs connect as they appear. Placement order doesn't matter: a torch can go up before the wall it hangs on. A final pass works the way structure loading does, and anything still unsupported, such as half a door, is reported back to Claude so it can fix it.
 
 ## Install
@@ -69,9 +76,9 @@ The mod looks for `claude` on `PATH`, in `~/.local/bin` and in `~/.claude/local`
 | `buildBlocksPerTick` | `2` | Minimum animation speed (20 ticks per second) |
 | `maxBuildSeconds` | `12` | Large stages speed up to finish within this time |
 | `buildEffects` | `true` | Block sounds and particles while animating |
-| `showToolActivity` | `true` | Shows what Claude is doing (for example "Claude is building...") in the action bar |
+| `showToolActivity` | `true` | Shows the animated status line in the action bar while Claude works |
 
-`config/claudecraft/system-prompt.md` is Claude's guidance on chat style, staged building, coordinates and building quality. It's re-read every turn, so you can tweak it while the game is running. Mod updates refresh it automatically unless you've edited it. Your edits are never overwritten.
+`config/claudecraft/system-prompt.md` is Claude's guidance on chat style, pacing builds, coordinates and building quality. It's re-read every turn, so you can tweak it while the game is running. Mod updates refresh it automatically unless you've edited it. Your edits are never overwritten.
 
 ## Notes and limitations
 

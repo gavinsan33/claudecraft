@@ -53,7 +53,7 @@ public class ClaudeBridge {
 		t.setDaemon(true);
 		return t;
 	});
-	private boolean running;
+	private volatile boolean running;
 	private volatile Process current;
 	private volatile boolean cancelled;
 	private volatile String sessionId;
@@ -88,10 +88,70 @@ public class ClaudeBridge {
 			}
 		}
 		ServerPlayer p = server.getPlayerList().getPlayerByName(msg.player());
-		if (p != null) {
-			p.sendSystemMessage(Component.literal(busy ? "Claude is busy; your message will be handled next." : "Claude is thinking...")
-				.withStyle(ChatFormatting.GRAY), true);
+		if (p != null && busy) {
+			p.sendSystemMessage(Component.literal("Claude is busy; your message will be handled next.").withStyle(ChatFormatting.GRAY));
 		}
+	}
+
+	// ---------------------------------------------------------------- status line (server thread)
+
+	/** Claude's orange, and the lighter shade that sweeps across the verb, as in Claude Code's spinner. */
+	private static final int ORANGE = 0xD77757, SHIMMER = 0xF5C1A9;
+	private static final String[] SPINNER = {"·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"};
+	private static final String[] THINKING = {"Thinking", "Pondering", "Scheming", "Tinkering", "Imagining", "Sketching", "Crafting", "Mulling"};
+
+	/** What Claude is doing right now, shown in the status line. */
+	private volatile String activity = THINKING[0];
+	private volatile String thinkingVerb = THINKING[0];
+	private long activeSince = -1, statusTicks;
+
+	/**
+	 * Keep an animated status in every player's action bar while Claude is working or blocks are still going up,
+	 * like Claude Code's spinner: "✻ Pondering… (12s · 340 blocks to go)". Action bar text fades on its own,
+	 * so this re-sends it every couple of ticks.
+	 */
+	public void tickStatus(BuildQueue builds) {
+		if (!cfg.showToolActivity) return;
+		boolean building = builds.isBusy();
+		long now = System.currentTimeMillis();
+		if (!running && !building) {
+			if (activeSince >= 0) {
+				String took = elapsed(now - activeSince);
+				activeSince = -1;
+				sendStatus(Component.literal("✻ ").withColor(ORANGE)
+					.append(Component.literal("Worked for " + took).withStyle(ChatFormatting.GRAY)));
+			}
+			return;
+		}
+		if (activeSince < 0) activeSince = now;
+		if (statusTicks++ % 2 != 0) return;
+
+		long frame = statusTicks / 2;
+		// While blocks are going up and Claude is only thinking, the build is what players see.
+		String verb = (building && (!running || activity.equals(thinkingVerb)) ? "Building" : activity) + "…";
+		MutableComponent line = Component.literal(SPINNER[(int) (frame % SPINNER.length)] + " ").withColor(ORANGE);
+		int sweep = (int) (frame % (verb.length() + 8)) - 4;
+		for (int i = 0; i < verb.length(); i++) {
+			line.append(Component.literal(String.valueOf(verb.charAt(i))).withColor(Math.abs(i - sweep) <= 1 ? SHIMMER : ORANGE));
+		}
+		StringBuilder info = new StringBuilder(" (").append(elapsed(now - activeSince));
+		if (building) info.append(" · ").append(String.format(java.util.Locale.ROOT, "%,d", builds.blocksLeft())).append(" blocks to go");
+		int queued;
+		synchronized (queue) {
+			queued = queue.size();
+		}
+		if (queued > 0) info.append(" · ").append(queued).append(" message").append(queued == 1 ? "" : "s").append(" queued");
+		line.append(Component.literal(info.append(')').toString()).withStyle(ChatFormatting.GRAY));
+		sendStatus(line);
+	}
+
+	private void sendStatus(Component c) {
+		for (ServerPlayer p : server.getPlayerList().getPlayers()) p.sendSystemMessage(c, true);
+	}
+
+	private static String elapsed(long ms) {
+		long s = ms / 1000;
+		return s < 60 ? s + "s" : s / 60 + "m " + s % 60 + "s";
 	}
 
 	/** Stop the current turn and drop queued messages. */
@@ -140,6 +200,8 @@ public class ClaudeBridge {
 				queue.clear();
 			}
 			cancelled = false;
+			thinkingVerb = THINKING[java.util.concurrent.ThreadLocalRandom.current().nextInt(THINKING.length)];
+			activity = thinkingVerb;
 			try {
 				runTurn(batch, true);
 			} catch (Exception e) {
@@ -147,6 +209,12 @@ public class ClaudeBridge {
 				broadcastError("Claude failed: " + e.getMessage());
 			} finally {
 				current = null;
+				// Builds keep animating after Claude's reply; they still belong to this turn's undo step.
+				try {
+					tools.buildsIdle().get(30, TimeUnit.MINUTES);
+				} catch (Exception e) {
+					ClaudeCraft.LOGGER.warn("Gave up waiting for builds to finish", e);
+				}
 				server.execute(() -> tools.undoHistory().commit());
 			}
 		}
@@ -240,7 +308,8 @@ public class ClaudeBridge {
 				String type = str(ev, "type");
 				if ("system".equals(type) && str(ev, "session_id") != null) updateSession(str(ev, "session_id"));
 				switch (type == null ? "" : type) {
-					case "assistant" -> handleAssistant(ev, requester);
+					case "assistant" -> handleAssistant(ev);
+					case "user" -> activity = thinkingVerb; // tool results came back; Claude is thinking again
 					case "result" -> {
 						gotResult = true;
 						resultError = ev.has("is_error") && ev.get("is_error").getAsBoolean();
@@ -278,13 +347,14 @@ public class ClaudeBridge {
 		}
 	}
 
-	private void handleAssistant(JsonObject ev, String requester) {
+	private void handleAssistant(JsonObject ev) {
 		JsonObject message = ev.has("message") ? ev.getAsJsonObject("message") : null;
 		if (message == null || !message.has("content")) return;
 		for (JsonElement el : message.getAsJsonArray("content")) {
 			JsonObject block = el.getAsJsonObject();
 			String btype = str(block, "type");
 			if ("text".equals(btype)) {
+				activity = thinkingVerb;
 				String text = cleanMarkdown(str(block, "text"));
 				if (text.isBlank() || text.strip().equals("NO_REPLY")) continue;
 				for (String line : text.split("\n")) {
@@ -293,22 +363,17 @@ public class ClaudeBridge {
 						.append(Component.literal(line.strip()).withStyle(ChatFormatting.WHITE));
 					broadcast(c);
 				}
-			} else if ("tool_use".equals(btype) && cfg.showToolActivity) {
+			} else if ("tool_use".equals(btype)) {
 				String name = str(block, "name");
 				if (name != null) name = name.replaceFirst("^mcp__minecraft__", "");
-				String label = switch (name == null ? "" : name) {
-					case "get_context" -> "looking around";
-					case "get_terrain", "scan_area" -> "surveying the area";
-					case "place_blueprint", "fill_region", "place_blocks" -> "building";
-					case "run_commands" -> "running commands";
-					case "undo" -> "undoing";
-					default -> name;
+				activity = switch (name == null ? "" : name) {
+					case "get_context" -> "Looking around";
+					case "get_terrain", "scan_area" -> "Surveying";
+					case "run_commands" -> "Running commands";
+					case "undo" -> "Undoing";
+					case "wait_for_builds" -> "Building";
+					default -> thinkingVerb; // placement tools return at once; the build shows in the status anyway
 				};
-				String finalLabel = label;
-				server.execute(() -> {
-					ServerPlayer p = server.getPlayerList().getPlayerByName(requester);
-					if (p != null) p.sendSystemMessage(Component.literal("Claude is " + finalLabel + "...").withStyle(ChatFormatting.GRAY), true);
-				});
 			}
 		}
 	}
