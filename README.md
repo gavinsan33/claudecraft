@@ -33,7 +33,7 @@ Claude's replies ◄── stream-json ◄─┘
 | `run_commands` | Any command, run as the requesting player (`@s`, `~`), at a capped permission level |
 | `undo` | Revert the last turn's block changes |
 
-Any `block` argument, and blueprint palette entries, can be a WorldEdit-style random mix such as `70%stone_bricks,30%mossy_stone_bricks`.
+Any `block` argument, and blueprint palette entries, can be a WorldEdit-style random mix such as `70%stone_bricks,30%mossy_stone_bricks`. Every placement tool also takes a WorldEdit-style `mask` that limits which blocks it may change, such as `minecraft:air` (never overwrite anything), `#minecraft:logs`, or `!#existing >#solid` (air resting on solid ground). Masks are checked as each block goes down.
 
 ### Builds you can watch
 

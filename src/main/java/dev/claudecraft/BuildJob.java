@@ -43,21 +43,24 @@ public final class BuildJob {
 	private final boolean effects;
 	private final double rate;
 	private final java.util.function.Consumer<String> onFinish;
+	private final java.util.function.Predicate<BlockPos> mask;
 	final CompletableFuture<String> done = new CompletableFuture<>();
 
 	private final List<BlockPos> placed = new ArrayList<>();
 	private final Set<BlockPos> placedSet = new HashSet<>();
-	private int index, unchanged, outside, ticks;
+	private int index, unchanged, outside, masked, ticks;
 	private double credit;
 	private boolean rushing;
 
 	/**
 	 * @param blocksPerTick placement speed, may be fractional; Integer.MAX_VALUE places everything in one tick
 	 * @param onFinish gets the result report before {@link #done} completes, may be null
+	 * @param mask checked against the world as each block is about to be placed; blocks that fail it are skipped. May be null
 	 */
 	public BuildJob(ServerLevel level, Map<BlockPos, BlockState> targets, UndoHistory undo, double blocksPerTick, boolean effects,
-			java.util.function.Consumer<String> onFinish) {
+			java.util.function.Consumer<String> onFinish, java.util.function.Predicate<BlockPos> mask) {
 		this.onFinish = onFinish;
+		this.mask = mask;
 		this.level = level;
 		this.targets = targets;
 		this.undo = undo;
@@ -108,6 +111,10 @@ public final class BuildJob {
 			BlockState state = targets.get(pos);
 			if (!level.isInsideBuildHeight(pos.getY())) {
 				outside++;
+				continue;
+			}
+			if (mask != null && !mask.test(pos)) {
+				masked++; // free, like unchanged blocks
 				continue;
 			}
 			BlockState old = level.getBlockState(pos);
@@ -208,6 +215,7 @@ public final class BuildJob {
 		if (note != null) sb.append(note).append(' ');
 		sb.append("Changed ").append(placed.size()).append(" blocks");
 		if (unchanged > 0) sb.append(", ").append(unchanged).append(" already matched");
+		if (masked > 0) sb.append(", ").append(masked).append(" skipped by the mask");
 		if (outside > 0) sb.append(", ").append(outside).append(" skipped (outside build height ")
 			.append(level.getMinY()).append("..").append(level.getMaxY()).append(")");
 		if (ticks > 1) sb.append(String.format(java.util.Locale.ROOT, " (animated over %.1fs)", ticks / 20.0));

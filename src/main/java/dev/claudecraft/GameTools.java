@@ -4,9 +4,11 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.mojang.brigadier.StringReader;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.minecraft.commands.CommandSource;
 import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.arguments.blocks.BlockPredicateArgument;
 import net.minecraft.commands.arguments.blocks.BlockStateParser;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
@@ -23,9 +25,11 @@ import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.Mirror;
 import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.pattern.BlockInWorld;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -46,6 +50,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 
 /** The MCP tools Claude uses to observe and act in the world. All world access runs on the server thread. */
 public class GameTools {
@@ -166,7 +171,11 @@ public class GameTools {
 	}
 
 	private void register(String name, String description, String schemaJson, Handler handler) {
-		tools.put(name, new Tool(name, description, JsonParser.parseString(schemaJson).getAsJsonObject(), handler));
+		JsonObject schema = JsonParser.parseString(schemaJson).getAsJsonObject();
+		// Every placement tool (the ones with duration_seconds) also takes a mask.
+		JsonObject props = schema.getAsJsonObject("properties");
+		if (props != null && props.has("duration_seconds")) props.add("mask", JsonParser.parseString(MASK_SCHEMA));
+		tools.put(name, new Tool(name, description, schema, handler));
 	}
 
 	// ---------------------------------------------------------------- tool definitions
@@ -179,6 +188,8 @@ public class GameTools {
 		{"type":"string","description":"A block state, or a random mix in WorldEdit pattern syntax, e.g. \\"70%minecraft:stone_bricks,20%minecraft:mossy_stone_bricks,10%minecraft:cracked_stone_bricks\\"."}""";
 	private static final String DURATION_SCHEMA = """
 		{"type":"number","description":"Optional: stretch or squeeze this build's animation to take about this many seconds (max 120). Default pacing is fast."}""";
+	private static final String MASK_SCHEMA = """
+		{"type":"string","description":"Optional WorldEdit-style mask: only change blocks where it matches, checked as each block is placed. Space-separated terms must all match. A term is a comma list of blocks, block tags or partial states (minecraft:air, #minecraft:logs, minecraft:oak_stairs[half=top]), or #existing (not air), #solid, #liquid, #surface (solid with no solid block above). Prefix >X for 'directly above X', <X for 'directly below X', !X to negate. Examples: minecraft:air (never overwrite anything), !#existing >#solid (air resting on solid ground), #surface !#minecraft:logs."}""";
 	private static final String QUEUED =
 		" Returns immediately: blocks animate into place in the background, one queued build after another, while you keep working. "
 			+ "Each build's result (block count, anything that couldn't survive) is attached to a later tool result. Undoable.";
@@ -226,14 +237,14 @@ public class GameTools {
 		register("fill_region",
 			"Fill the box between two corners (inclusive) with one block state. Modes: solid (whole box), hollow (shell of "
 				+ "the block with air inside), outline (shell only, inside untouched), walls (four vertical sides only). "
-				+ "Optional replace limits changes to blocks matching that id (e.g. minecraft:grass_block) or exact state. "
-				+ "Use block minecraft:air to clear space. With replace, it waits for queued builds first so it sees them." + QUEUED,
+				+ "Optional replace only changes blocks matching it (e.g. minecraft:grass_block); it's shorthand for a mask. "
+				+ "Use block minecraft:air to clear space." + QUEUED,
 			"""
 				{"type":"object","properties":{
 				  "from":%s,"to":%s,
 				  "block":%s,
 				  "mode":{"type":"string","enum":["solid","hollow","outline","walls"]},
-				  "replace":{"type":"string","description":"Only replace blocks of this id/state."},
+				  "replace":{"type":"string","description":"Only replace blocks matching this (same syntax as mask)."},
 				  "duration_seconds":%s,
 				  "dimension":%s
 				},"required":["from","to","block"]}""".formatted(POS_SCHEMA, POS_SCHEMA, PATTERN_SCHEMA, DURATION_SCHEMA, DIM_SCHEMA),
@@ -421,24 +432,15 @@ public class GameTools {
 		Pattern pattern(String s) throws ToolError {
 			List<BlockState> states = new ArrayList<>();
 			List<Double> weights = new ArrayList<>();
-			int depth = 0, start = 0;
-			for (int i = 0; i <= s.length(); i++) {
-				char c = i < s.length() ? s.charAt(i) : ',';
-				if (c == '[' || c == '{') depth++;
-				else if (c == ']' || c == '}') depth--;
-				else if (c == ',' && depth == 0) {
-					String part = s.substring(start, i).trim();
-					start = i + 1;
-					if (part.isEmpty()) continue;
-					var m = java.util.regex.Pattern.compile("^(\\d+(?:\\.\\d+)?)%\\s*(.+)$").matcher(part);
-					double w = 1;
-					if (m.matches()) {
-						w = Double.parseDouble(m.group(1));
-						part = m.group(2);
-					}
-					states.add(parse(part));
-					weights.add(w);
+			for (String part : splitTopLevel(s)) {
+				var m = java.util.regex.Pattern.compile("^(\\d+(?:\\.\\d+)?)%\\s*(.+)$").matcher(part);
+				double w = 1;
+				if (m.matches()) {
+					w = Double.parseDouble(m.group(1));
+					part = m.group(2);
 				}
+				states.add(parse(part));
+				weights.add(w);
 			}
 			if (states.isEmpty()) throw new ToolError("Empty block pattern");
 			double[] cum = new double[weights.size()];
@@ -458,11 +460,77 @@ public class GameTools {
 		}
 	}
 
+	/** Split on commas that aren't inside [...] or {...} (those belong to a block state or NBT). */
+	private static List<String> splitTopLevel(String s) {
+		List<String> parts = new ArrayList<>();
+		int depth = 0, start = 0;
+		for (int i = 0; i <= s.length(); i++) {
+			char c = i < s.length() ? s.charAt(i) : ',';
+			if (c == '[' || c == '{') depth++;
+			else if (c == ']' || c == '}') depth--;
+			else if (c == ',' && depth == 0) {
+				String part = s.substring(start, i).trim();
+				start = i + 1;
+				if (!part.isEmpty()) parts.add(part);
+			}
+		}
+		return parts;
+	}
+
+	/** The mask (and fill_region's replace) from a tool call, or null for none. See MASK_SCHEMA for the syntax. */
+	private static Predicate<BlockPos> mask(ServerLevel level, JsonObject args) throws ToolError {
+		Predicate<BlockPos> all = null;
+		for (String key : List.of("mask", "replace")) {
+			if (!args.has(key) || args.get(key).getAsString().isBlank()) continue;
+			for (String term : args.get(key).getAsString().trim().split("\\s+")) {
+				Predicate<BlockPos> t = maskTerm(level, term);
+				all = all == null ? t : all.and(t);
+			}
+		}
+		return all;
+	}
+
+	private static Predicate<BlockPos> maskTerm(ServerLevel level, String term) throws ToolError {
+		if (term.startsWith("!")) return maskTerm(level, term.substring(1)).negate();
+		if (term.startsWith(">")) {
+			Predicate<BlockPos> below = maskTerm(level, term.substring(1));
+			return p -> below.test(p.below());
+		}
+		if (term.startsWith("<")) {
+			Predicate<BlockPos> above = maskTerm(level, term.substring(1));
+			return p -> above.test(p.above());
+		}
+		switch (term) {
+			case "#existing": return p -> !level.getBlockState(p).isAir();
+			case "#solid": return p -> level.getBlockState(p).isSolid();
+			case "#liquid": return p -> level.getBlockState(p).liquid();
+			case "#surface": return p -> level.getBlockState(p).isSolid() && !level.getBlockState(p.above()).isSolid();
+			default: break;
+		}
+		// Block ids, #tags and partial states, parsed the way /execute if block does.
+		List<Predicate<BlockInWorld>> any = new ArrayList<>();
+		for (String part : splitTopLevel(term)) {
+			try {
+				StringReader reader = new StringReader(part);
+				any.add(BlockPredicateArgument.parse(level.holderLookup(Registries.BLOCK), reader));
+				if (reader.canRead()) throw new ToolError("Unexpected '" + reader.getRemaining() + "' in mask term '" + part + "'");
+			} catch (CommandSyntaxException e) {
+				throw new ToolError("Bad mask term '" + part + "': " + e.getMessage());
+			}
+		}
+		if (any.isEmpty()) throw new ToolError("Empty mask term");
+		return p -> {
+			BlockInWorld b = new BlockInWorld(level, p, true);
+			for (Predicate<BlockInWorld> m : any) if (m.test(b)) return true;
+			return false;
+		};
+	}
+
 	/** Queue a build and return right away; its result goes into {@link #reports} when it's done. */
-	private String queueBuild(ServerLevel level, Map<BlockPos, BlockState> changes, JsonObject args) {
+	private String queueBuild(ServerLevel level, Map<BlockPos, BlockState> changes, JsonObject args) throws ToolError {
 		int id = buildIds.incrementAndGet();
 		double secs = args.has("duration_seconds") ? args.get("duration_seconds").getAsDouble() : 0;
-		builds.enqueue(level, changes, undo, secs, r -> reports.add("Build #" + id + ": " + r));
+		builds.enqueue(level, changes, undo, secs, r -> reports.add("Build #" + id + ": " + r), mask(level, args));
 		return "Queued build #" + id + " (" + changes.size() + " blocks). Everything queued is done in about " + builds.secondsLeft()
 			+ "s. It's animating now; keep working.";
 	}
@@ -655,28 +723,13 @@ public class GameTools {
 		return queueBuild(level, changes, args);
 	}
 
-	private Object fillRegion(JsonObject args) throws ToolError {
-		// A replace filter reads the world, so let queued builds land first.
-		if (args.has("replace") && !args.get("replace").getAsString().isBlank()) return afterBuilds(() -> fillRegionNow(args));
-		return fillRegionNow(args);
-	}
-
-	private String fillRegionNow(JsonObject args) throws ToolError {
+	private String fillRegion(JsonObject args) throws ToolError {
 		ServerLevel level = level(args);
 		BlockPos a = pos(args, "from"), b = pos(args, "to");
 		BlockParser parser = new BlockParser(level);
 		Pattern state = parser.pattern(args.get("block").getAsString());
 		String mode = args.has("mode") ? args.get("mode").getAsString() : "solid";
-		BlockState air = net.minecraft.world.level.block.Blocks.AIR.defaultBlockState();
-
-		BlockState replaceState = null;
-		Block replaceBlock = null;
-		if (args.has("replace") && !args.get("replace").getAsString().isBlank()) {
-			String r = args.get("replace").getAsString();
-			BlockState rs = parser.parse(r);
-			if (r.contains("[")) replaceState = rs;
-			else replaceBlock = rs.getBlock();
-		}
+		BlockState air = Blocks.AIR.defaultBlockState();
 
 		int x0 = Math.min(a.getX(), b.getX()), x1 = Math.max(a.getX(), b.getX());
 		int y0 = Math.min(a.getY(), b.getY()), y1 = Math.max(a.getY(), b.getY());
@@ -697,12 +750,7 @@ public class GameTools {
 						default -> throw new ToolError("Unknown mode " + mode);
 					};
 					if (target == null) continue;
-					BlockPos p = new BlockPos(x, y, z);
-					if (replaceState != null || replaceBlock != null) {
-						BlockState cur = level.getBlockState(p);
-						if (replaceState != null ? cur != replaceState : !cur.is(replaceBlock)) continue;
-					}
-					changes.put(p, target);
+					changes.put(new BlockPos(x, y, z), target);
 				}
 			}
 		}
@@ -895,7 +943,7 @@ public class GameTools {
 		for (UndoHistory.Entry entry : entries) {
 			for (var dimEntry : entry.originals.entrySet()) {
 				ServerLevel lvl = server.getLevel(dimEntry.getKey());
-				if (lvl != null) parts.add(builds.enqueue(lvl, dimEntry.getValue(), null, 0, null));
+				if (lvl != null) parts.add(builds.enqueue(lvl, dimEntry.getValue(), null, 0, null, null));
 			}
 		}
 		int n = entries.size();
