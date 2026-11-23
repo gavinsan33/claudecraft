@@ -4,6 +4,8 @@ A Fabric mod for Minecraft 26.3 that lets you play with Claude Code from in-game
 
 ![A Taj Mahal, a giant sprinkled donut and the White House, built by Claude in one world](docs/showcase.jpg)
 
+**[Download the latest release](https://github.com/gavinsan33/claudecraft/releases/latest)** and drop the jar in your mods folder. It needs Minecraft 26.3 with Fabric Loader and Fabric API; see [Install](#install).
+
 ## How it works
 
 ```
@@ -55,6 +57,8 @@ Custom blocks work the same way: Claude paints a cube's faces like a vanilla 16x
 
 Creatures are built from voxel parts that the client animates by role: heads follow where the creature looks, legs and arms swing as it walks, wings flap, tails sway. Each one has its own health, speed, behavior (passive, neutral or hostile), walking or flying, sounds borrowed from a vanilla mob, drops, and commands that run when a player right-clicks it. Redefining a creature updates the ones already spawned.
 
+![A hippo and its baby, custom creatures Claude designed, on a beach](docs/custom-creature.jpg)
+
 Under the hood there's one registered item, `claudecraft:custom_item`, and each stack names its definition in a `claudecraft:definition` component, because Minecraft can't register new items while it runs. You can also give one with `/give @s claudecraft:custom_item[claudecraft:definition="ruby"]`, though `give_item` also applies the item's behavior. Blocks are one registered block, `claudecraft:custom_block`, with a numbered `variant` state per design (up to 256 per world), and creatures are one entity type, `claudecraft:custom_entity`, that stores its definition (`/summon claudecraft:custom_entity ~ ~ ~ {Definition:"frost_fox"}` works too).
 
 ### Builds you can watch
@@ -69,9 +73,17 @@ Placement calls return immediately and the blocks animate in the background, one
 
 ## Install
 
-1. Install [Claude Code](https://claude.com/claude-code) on the host machine and log in once by running `claude` in a terminal.
-2. `./gradlew build`, then copy `build/libs/claudecraft-<version>.jar` into `.minecraft/mods` next to Fabric API.
-3. Start a world and type in chat.
+**Every player**, the host and anyone joining:
+
+1. Install [Fabric Loader](https://fabricmc.net/use/) for Minecraft 26.3.
+2. Download `claudecraft-<version>.jar` from the [latest release](https://github.com/gavinsan33/claudecraft/releases/latest) and put it in `.minecraft/mods`, along with [Fabric API](https://modrinth.com/mod/fabric-api).
+
+**The host** also:
+
+3. Installs [Claude Code](https://claude.com/claude-code) and logs in once by running `claude` in a terminal.
+4. Starts a world (or hosts one with Essential) and types in chat.
+
+To update, replace the old `claudecraft` jar in your mods folder with the new one from [Releases](https://github.com/gavinsan33/claudecraft/releases).
 
 The mod looks for `claude` on `PATH`, in `~/.local/bin` and in `~/.claude/local`. If yours is installed elsewhere, set `claudePath` in the config.
 
@@ -110,7 +122,7 @@ The mod looks for `claude` on `PATH`, in `~/.local/bin` and in `~/.claude/local`
 
 ## Development
 
-`./gradlew runServer` starts a dev server. Typing `claude ask build a tower at 0 ~ 0` in its console exercises the whole pipeline with no client needed. The JDK 25 toolchain is downloaded automatically if your system Java has no compiler.
+`./gradlew build` builds the jar into `build/libs/`. `./gradlew runServer` starts a dev server. Typing `claude ask build a tower at 0 ~ 0` in its console exercises the whole pipeline with no client needed. The JDK 25 toolchain is downloaded automatically if your system Java has no compiler.
 
 `java src/main/java/dev/claudecraft/Shapes.java` (likewise `Renderer.java`) runs a quick self-check of the shape math or the build renderer.
 
