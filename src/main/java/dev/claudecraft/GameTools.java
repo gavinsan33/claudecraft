@@ -266,19 +266,20 @@ public class GameTools {
 				+ "dome (top half of a sphere, center is the middle of its base), cylinder (center of the base, radius, height, "
 				+ "axis y/x/z; negative height extends the other way), cone and pyramid (center of the base, radius = base "
 				+ "half-width, height; negative height points down; a pyramid with height radius+1 has one-block steps), "
-				+ "torus (center, major radius, minor radius, axis of the hole), line (points: a polyline, radius 0 = thin). "
+				+ "torus (center, major radius, minor radius, axis of the hole), line (points: a polyline, radius 0 = thin), "
+				+ "curve (points: a smooth spline through every point, like WorldEdit //curve; for arches, cables, curved legs). "
 				+ "hollow draws only a 1-block shell and leaves the inside untouched; hollow cylinders, cones and pyramids "
 				+ "are open at the ends/base (tubes, roofs). Coordinates are block positions; radii may be decimals." + QUEUED,
 			"""
 				{"type":"object","properties":{
-				  "shape":{"type":"string","enum":["sphere","dome","cylinder","cone","pyramid","torus","line"]},
+				  "shape":{"type":"string","enum":["sphere","dome","cylinder","cone","pyramid","torus","line","curve"]},
 				  "center":%s,
 				  "radius":{"type":"number"},
 				  "radii":{"type":"array","items":{"type":"number"},"description":"sphere/dome only: [rx, ry, rz]."},
 				  "height":{"type":"integer","description":"cylinder, cone, pyramid. For cylinders along x or z, the length."},
 				  "minor_radius":{"type":"number","description":"torus tube radius (default 1)."},
 				  "axis":{"type":"string","enum":["y","x","z"],"description":"cylinder and torus orientation (default y)."},
-				  "points":{"type":"array","items":%s,"description":"line only: two or more points."},
+				  "points":{"type":"array","items":%s,"description":"line and curve: two or more points."},
 				  "hollow":{"type":"boolean"},
 				  "block":%s,
 				  "duration_seconds":%s,
@@ -790,9 +791,9 @@ public class GameTools {
 		Pattern block = new BlockParser(level).pattern(args.get("block").getAsString());
 		boolean hollow = args.has("hollow") && args.get("hollow").getAsBoolean();
 		List<int[]> voxels;
-		if (shape.equals("line")) {
+		if (shape.equals("line") || shape.equals("curve")) {
 			if (!args.has("points") || !args.get("points").isJsonArray() || args.getAsJsonArray("points").isEmpty()) {
-				throw new ToolError("line needs points: [{x,y,z}, ...]");
+				throw new ToolError(shape + " needs points: [{x,y,z}, ...]");
 			}
 			List<int[]> pts = new ArrayList<>();
 			JsonObject wrap = new JsonObject();
@@ -801,7 +802,8 @@ public class GameTools {
 				BlockPos p = pos(wrap, "p");
 				pts.add(new int[]{p.getX(), p.getY(), p.getZ()});
 			}
-			voxels = Shapes.line(pts, Math.max(0, optDouble(args, "radius", 0)));
+			double radius = Math.max(0, optDouble(args, "radius", 0));
+			voxels = shape.equals("curve") ? Shapes.curve(pts, radius) : Shapes.line(pts, radius);
 		} else {
 			BlockPos c = pos(args, "center");
 			double r = optDouble(args, "radius", -1);

@@ -25,7 +25,7 @@ Placement calls return immediately. Their blocks animate into place in the backg
 
 ## Tools
 - `place_blueprint` places a hand-designed structure. You give it a palette of single characters mapped to block states, plus layers from bottom to top. Each layer is a list of rows going along +z, and each character in a row goes along +x. Best for detailed parts: facades, rooms, furniture, roofs with stairs.
-- `draw_shape` draws spheres, domes, cylinders (any axis), cones, pyramids, tori and lines/polylines, solid or hollow. Fast to specify, so it's ideal for getting the first blocks moving: tower bodies, domes, spires, pillars, arches of lines, cables.
+- `draw_shape` draws spheres, domes, cylinders (any axis), cones, pyramids, tori, straight lines and smooth curves through points, solid or hollow. Fast to specify, so it's ideal for getting the first blocks moving: tower bodies, domes, spires, pillars, arches, cables, curved legs.
 - `generate` fills a box wherever a math expression is true. Use it for curves and organic forms no other tool can express (curved tapering legs, twisted spires, waves, arches).
 - `clone_region` copies a box with rotation, mirroring and stacking. Build one leg, wing, floor or window bay, then clone it for symmetry or repetition instead of designing it again.
 - `fill_region` handles boxes: solid, hollow, outline or walls, with an optional replace filter. Use `minecraft:air` to clear space. Good for clearing ground and pouring foundations.

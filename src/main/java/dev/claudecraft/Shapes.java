@@ -135,6 +135,30 @@ final class Shapes {
 		return out;
 	}
 
+	/** Smooth curve passing through every point (Catmull-Rom spline), drawn like {@link #line}. */
+	static List<int[]> curve(List<int[]> points, double radius) {
+		if (points.size() < 3) return line(points, radius);
+		List<int[]> samples = new ArrayList<>();
+		int n = points.size();
+		for (int i = 0; i + 1 < n; i++) {
+			int[] p0 = points.get(Math.max(0, i - 1)), p1 = points.get(i), p2 = points.get(i + 1), p3 = points.get(Math.min(n - 1, i + 2));
+			double len = Math.max(Math.abs(p2[0] - p1[0]), Math.max(Math.abs(p2[1] - p1[1]), Math.abs(p2[2] - p1[2])));
+			int steps = Math.max(1, (int) Math.ceil(len * 2));
+			for (int s = 0; s < steps; s++) {
+				double t = (double) s / steps;
+				int[] q = new int[3];
+				for (int k = 0; k < 3; k++) q[k] = (int) Math.round(catmullRom(p0[k], p1[k], p2[k], p3[k], t));
+				samples.add(q);
+			}
+		}
+		samples.add(points.get(n - 1));
+		return line(samples, radius); // joins the samples, so the curve stays connected
+	}
+
+	private static double catmullRom(double p0, double p1, double p2, double p3, double t) {
+		return 0.5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (3 * p1 - p0 - 3 * p2 + p3) * t * t * t);
+	}
+
 	// ---------------------------------------------------------------- expressions
 
 	interface Expr { double eval(double[] vars); }
@@ -345,6 +369,15 @@ final class Shapes {
 			int[] p = diag.get(k - 1), q = diag.get(k);
 			check(Math.abs(p[0] - q[0]) <= 1 && Math.abs(p[1] - q[1]) <= 1 && Math.abs(p[2] - q[2]) <= 1, "polyline is connected");
 		}
+		List<int[]> arch = curve(List.of(new int[]{0, 0, 0}, new int[]{5, 6, 0}, new int[]{10, 0, 0}), 0);
+		check(arch.stream().anyMatch(v -> v[0] == 5 && v[1] == 6), "curve passes through its points");
+		check(arch.stream().anyMatch(v -> v[0] == 10 && v[1] == 0), "curve reaches its end");
+		check(arch.stream().noneMatch(v -> v[1] > 7), "curve doesn't overshoot much");
+		for (int k = 1; k < arch.size(); k++) {
+			int[] p = arch.get(k - 1), q = arch.get(k);
+			check(Math.abs(p[0] - q[0]) <= 1 && Math.abs(p[1] - q[1]) <= 1 && Math.abs(p[2] - q[2]) <= 1, "curve is connected");
+		}
+
 		System.out.println("Shapes self-check passed.");
 	}
 

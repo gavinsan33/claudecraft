@@ -24,7 +24,7 @@ Claude's replies ◄── stream-json ◄─┘
 | `get_terrain` | Surface heightmap plus surface blocks for an area |
 | `scan_area` | Read blocks in a box, in the same format `place_blueprint` uses |
 | `place_blueprint` | Palette plus layered character grid. Claude's main way to build things it designed itself |
-| `draw_shape` | WorldEdit-style sphere, dome, cylinder (any axis), cone, pyramid, torus and polyline, solid or hollow |
+| `draw_shape` | WorldEdit-style sphere, dome, cylinder (any axis), cone, pyramid, torus, polyline and smooth curve (`//curve`), solid or hollow |
 | `generate` | Fill a box wherever a math expression is true, like WorldEdit's `//generate` |
 | `clone_region` | Copy a box with rotation, mirroring and stacking (`//copy`, `//paste`, `//stack`) |
 | `fill_region` | Box fill: solid, hollow, outline or walls, with an optional replace filter |
