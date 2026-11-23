@@ -27,6 +27,9 @@ Claude's replies ◄── stream-json ◄─┘
 | `draw_shape` | WorldEdit-style sphere, dome, cylinder (any axis), cone, pyramid, torus, polyline and smooth curve (`//curve`), solid or hollow |
 | `generate` | Fill a box wherever a math expression is true, like WorldEdit's `//generate` |
 | `clone_region` | Copy a box with rotation, mirroring and stacking (`//copy`, `//paste`, `//stack`) |
+| `overlay` | Cover the ground following the terrain, on top of it or replacing its top layer (`//overlay`) |
+| `smooth_terrain` | Even out bumpy ground into gentle slopes (`//smooth`) |
+| `naturalize` | Grass on top, then dirt, then stone (`//naturalize`) |
 | `fill_region` | Box fill: solid, hollow, outline or walls, with an optional replace filter |
 | `place_blocks` | Individual blocks at exact coordinates |
 | `wait_for_builds` | Wait for queued builds to finish and get their results |
