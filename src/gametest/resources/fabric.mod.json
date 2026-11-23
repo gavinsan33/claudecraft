@@ -4,7 +4,7 @@
 	"version": "1.0.0",
 	"environment": "*",
 	"entrypoints": {
-		"fabric-client-gametest": ["dev.claudecraft.CustomItemsClientTest"]
+		"fabric-client-gametest": ["dev.claudecraft.CustomItemsClientTest", "dev.claudecraft.CustomBlocksClientTest"]
 	},
 	"depends": { "claudecraft": "*" }
 }
