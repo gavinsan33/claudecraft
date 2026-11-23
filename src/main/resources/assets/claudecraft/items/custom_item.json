@@ -1,0 +1,17 @@
+{
+  "model": {
+    "type": "minecraft:select",
+    "property": "claudecraft:style",
+    "cases": [
+      {
+        "when": "handheld",
+        "model": { "type": "minecraft:special", "base": "claudecraft:item/voxel_handheld", "model": { "type": "claudecraft:voxel" } }
+      },
+      {
+        "when": "block",
+        "model": { "type": "minecraft:special", "base": "claudecraft:item/voxel_block", "model": { "type": "claudecraft:voxel" } }
+      }
+    ],
+    "fallback": { "type": "minecraft:special", "base": "claudecraft:item/voxel_item", "model": { "type": "claudecraft:voxel" } }
+  }
+}

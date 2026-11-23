@@ -12,7 +12,7 @@ player chat ──► mod ──► `claude -p --resume <session>` (headless Cla
 Claude's replies ◄── stream-json ◄─┘
 ```
 
-- The mod is **server-side only**. It runs in the integrated server, so it works in singleplayer and in **Essential**-hosted worlds. Only the host needs the mod and Claude Code installed. Friends join normally.
+- The mod runs in the integrated server, so it works in singleplayer and in **Essential**-hosted worlds. Only the host needs Claude Code installed, but **every player needs the mod** (and Fabric API), because it adds custom items that clients have to know how to draw.
 - Each world has **one shared conversation**, so Claude remembers earlier builds and requests across restarts. Messages are labeled with who sent them and where that player was standing. Messages sent while Claude is busy are batched into its next turn.
 - Claude runs with **no built-in tools** (no shell and no file access) and only the `minecraft` MCP tools, all pre-approved. Chat can't make it touch your computer.
 
@@ -34,10 +34,26 @@ Claude's replies ◄── stream-json ◄─┘
 | `place_blocks` | Individual blocks at exact coordinates |
 | `view_build` | Rendered picture of an area (isometric from any of four corners, or top-down) so Claude can see how its build looks |
 | `wait_for_builds` | Wait for queued builds to finish and get their results |
+| `define_item` | Invent a custom item: a voxel model (pixel art or 3D) plus behavior (damage, food, durability, right-click commands...) that every player sees instantly |
+| `define_block` | Invent a custom block: a painted cube like a vanilla block, or a small voxel shape, with light, hardness, sound, collision and right-click commands |
+| `define_entity` | Invent a custom creature: animated voxel parts (head, legs, wings, tail...) plus health, speed, behavior, flying, sounds, drops and right-click commands |
+| `spawn_entity` | Spawn custom creatures |
+| `give_item` | Give a player a custom item or block |
+| `view_item` | Picture of a custom item's, block's or creature's model |
 | `run_commands` | Any command, run as the requesting player (`@s`, `~`), at a capped permission level |
 | `undo` | Revert the last turn's block changes |
 
 Any `block` argument, and blueprint palette entries, can be a WorldEdit-style random mix such as `70%stone_bricks,30%mossy_stone_bricks`. Every placement tool also takes a WorldEdit-style `mask` that limits which blocks it may change, such as `minecraft:air` (never overwrite anything), `#minecraft:logs`, or `!#existing >#solid` (air resting on solid ground). Masks are checked as each block goes down.
+
+### Custom items, blocks and creatures
+
+Claude can invent items that don't exist in Minecraft and hand them out on the spot: a frost sword, a healing berry, a teleport wand. Each one is a voxel model Claude designs (16x16 pixel art like vanilla items, or a small 3D model) plus behavior: melee damage, food, durability, stack size, glint, rarity, and commands that run on right-click. Definitions are saved with the world and sent to every player as soon as they're made, so new items appear instantly with no resource pack or restart.
+
+Custom blocks work the same way: Claude paints a cube's faces like a vanilla 16x16 texture, or sculpts a smaller shape (a lamp, a crystal), and sets its light, hardness, sound, collision and right-click commands. They're drawn straight into the world's chunk meshes like vanilla blocks, and Claude can use them anywhere in its building tools as `custom:<id>`. Redefining a block redraws every copy already placed.
+
+Creatures are built from voxel parts that the client animates by role: heads follow where the creature looks, legs and arms swing as it walks, wings flap, tails sway. Each one has its own health, speed, behavior (passive, neutral or hostile), walking or flying, sounds borrowed from a vanilla mob, drops, and commands that run when a player right-clicks it. Redefining a creature updates the ones already spawned.
+
+Under the hood there's one registered item, `claudecraft:custom_item`, and each stack names its definition in a `claudecraft:definition` component, because Minecraft can't register new items while it runs. You can also give one with `/give @s claudecraft:custom_item[claudecraft:definition="ruby"]`, though `give_item` also applies the item's behavior. Blocks are one registered block, `claudecraft:custom_block`, with a numbered `variant` state per design (up to 256 per world), and creatures are one entity type, `claudecraft:custom_entity`, that stores its definition (`/summon claudecraft:custom_entity ~ ~ ~ {Definition:"frost_fox"}` works too).
 
 ### Builds you can watch
 
@@ -93,3 +109,7 @@ The mod looks for `claude` on `PATH`, in `~/.local/bin` and in `~/.claude/local`
 ## Development
 
 `./gradlew runServer` starts a dev server. Typing `claude ask build a tower at 0 ~ 0` in its console exercises the whole pipeline with no client needed. The JDK 25 toolchain is downloaded automatically if your system Java has no compiler.
+
+`java src/main/java/dev/claudecraft/Shapes.java` (likewise `Renderer.java`) runs a quick self-check of the shape math or the build renderer.
+
+`xvfb-run -a ./gradlew runClientGameTest` (with `WAYLAND_DISPLAY` unset, so the game uses the virtual display) launches the real game headless, defines a few custom items, checks their names and right-click commands, and saves screenshots to `build/run/clientGameTest/screenshots`.

@@ -37,6 +37,7 @@ public class ClaudeCraft implements ModInitializer {
 	public void onInitialize() {
 		Path configDir = FabricLoader.getInstance().getConfigDir().resolve(MOD_ID);
 		installSystemPrompt(configDir);
+		CustomItems.register();
 
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> start(server, configDir));
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> shutdown());
@@ -96,6 +97,7 @@ public class ClaudeCraft implements ModInitializer {
 
 	private static void start(MinecraftServer server, Path configDir) {
 		config = Config.load(configDir.resolve("config.json"));
+		CustomItems.load(server);
 		builds = new BuildQueue(config);
 		tools = new GameTools(server, config, new UndoHistory(), builds);
 		mcp = new McpServer(tools);
@@ -107,6 +109,11 @@ public class ClaudeCraft implements ModInitializer {
 			return;
 		}
 		bridge = new ClaudeBridge(server, config, tools, mcp, configDir);
+	}
+
+	/** Run a custom item's commands as the player using it. Server thread. */
+	static void runItemCommands(ServerPlayer player, java.util.List<String> commands) {
+		if (tools != null && !commands.isEmpty()) tools.execute(player, commands);
 	}
 
 	private static void shutdown() {

@@ -418,6 +418,140 @@ public class GameTools {
 				},"required":["from","to"]}""".formatted(POS_SCHEMA, POS_SCHEMA, DIM_SCHEMA),
 			this::viewBuild);
 
+		register("define_item",
+			"Create a custom item, or update one by reusing its id. It appears for every player right away, drawn from "
+				+ "your voxel model with real lighting. Draw flat items as pixel art in pixels (rows top to bottom, characters "
+				+ "left to right, like a 16x16 vanilla item sprite, extruded thickness voxels deep), or give a 3D model in layers "
+				+ "(place_blueprint format: layers bottom to top, rows along +z, characters along +x). palette maps characters "
+				+ "to #RRGGBB or #AARRGGBB colors (alpha below FF is see-through); '.' and ' ' are empty. Up to 32 voxels per "
+				+ "side; 16 is one item's normal size and bigger models are scaled to fit. style picks how it's held: item "
+				+ "(flat items like food, gems, potions), handheld (tools and weapons, held like a sword; draw them diagonally, "
+				+ "bottom-left to top-right like vanilla), block (chunky 3D objects held like a block). properties set behavior. "
+				+ "Updating a definition changes the look, name and commands of existing copies at once; stack size, food, "
+				+ "damage, durability, glint, rarity and cooldown apply to copies given afterwards.",
+			"""
+				{"type":"object","properties":{
+				  "id":{"type":"string","description":"Lowercase letters, digits and underscores, e.g. ruby_sword."},
+				  "name":{"type":"string"},
+				  "description":{"type":"string","description":"Tooltip text; newlines make extra lines."},
+				  "style":{"type":"string","enum":["item","handheld","block"]},
+				  "palette":{"type":"object","additionalProperties":{"type":"string"}},
+				  "pixels":{"type":"array","items":{"type":"string"}},
+				  "thickness":{"type":"integer","description":"pixels only: depth in voxels (default 1)."},
+				  "layers":{"type":"array","items":{"type":"array","items":{"type":"string"}}},
+				  "properties":{"type":"object","properties":{
+				    "max_stack":{"type":"integer","description":"1 to 99, default 64."},
+				    "durability":{"type":"integer","description":"Uses before it breaks; makes it unstackable."},
+				    "attack_damage":{"type":"number","description":"Total melee damage, e.g. 7 like a diamond sword."},
+				    "attack_speed":{"type":"number","description":"Attacks per second, e.g. 1.6 like a sword."},
+				    "food":{"type":"object","properties":{"nutrition":{"type":"integer"},"saturation":{"type":"number"},"always_edible":{"type":"boolean"}}},
+				    "use_commands":{"type":"array","items":{"type":"string"},"description":"Run as the player on right-click (or when eaten, for food). @s is the player, ~ ~ ~ their position."},
+				    "cooldown_seconds":{"type":"number"},
+				    "glint":{"type":"boolean"},
+				    "rarity":{"type":"string","enum":["common","uncommon","rare","epic"]}
+				  }}
+				},"required":["id","name","palette"]}""",
+			this::defineItem);
+
+		register("define_block",
+			"Create a custom block, or update one by reusing its id. Every player sees it right away. Either paint a full "
+				+ "cube like a vanilla block with faces (16 rows of 16 characters per face, seen from outside with up toward the "
+				+ "sky; give all, or side plus top and bottom, or individual north/south/east/west/top/bottom), or sculpt any "
+				+ "shape in layers (place_blueprint format, at most 16 voxels per side; 16 fills the block, smaller models sit "
+				+ "on the floor centered, e.g. a lamp, a statue, a crystal cluster). palette maps characters to #RRGGBB or "
+				+ "#AARRGGBB colors (alpha below FF is see-through, like glass). Place it with any placement tool as "
+				+ "custom:<id> (patterns and masks too), or give it with give_item. properties: light (0 to 15), hardness "
+				+ "(seconds-ish to mine; 1.5 is stone, 0 instant, -1 unbreakable), sound, collision (model: the voxel shape, "
+				+ "full, or none to walk through), and use_commands that run when a player right-clicks it, as that player but "
+				+ "at the block (~ ~ ~ is the block). Updating changes the look, shape, sound and commands of blocks already "
+				+ "placed; light applies to blocks placed afterwards. Up to " + CustomBlocks.SLOTS + " block designs per world.",
+			"""
+				{"type":"object","properties":{
+				  "id":{"type":"string","description":"Lowercase letters, digits and underscores, e.g. ruby_ore."},
+				  "name":{"type":"string"},
+				  "description":{"type":"string"},
+				  "palette":{"type":"object","additionalProperties":{"type":"string"}},
+				  "faces":{"type":"object","additionalProperties":{"type":"array","items":{"type":"string"}}},
+				  "layers":{"type":"array","items":{"type":"array","items":{"type":"string"}}},
+				  "properties":{"type":"object","properties":{
+				    "light":{"type":"integer"},
+				    "hardness":{"type":"number"},
+				    "sound":{"type":"string","enum":%s},
+				    "collision":{"type":"string","enum":["model","full","none"]},
+				    "use_commands":{"type":"array","items":{"type":"string"}}
+				  }}
+				},"required":["id","name","palette"]}""".formatted(new com.google.gson.Gson().toJson(CustomBlocks.SOUNDS)),
+			this::defineBlock);
+
+		register("define_entity",
+			"Create a custom creature, or update one by reusing its id (creatures already spawned change too). Build it from "
+				+ "voxel parts that are animated by role: body (still), head (turns to look around), leg (swings while walking; "
+				+ "legs with the same phase move together, so give four legs diagonal pairs), arm (swings opposite the legs), "
+				+ "wing (flaps), tail (sways), none (still). Coordinates are voxels in the creature's own space: x = 0, z = 0 "
+				+ "is its center, y = 0 its feet, +z is the way it faces (its front) and +x its left side. Each part has "
+				+ "layers (place_blueprint format: layers bottom to top, rows along +z, characters along +x), origin (where "
+				+ "its layers start: the minimum corner) and pivot (the point it rotates around: a hip, shoulder, neck or wing "
+				+ "root; default the top center of the part). One palette of #RRGGBB / #AARRGGBB colors is shared by all parts. "
+				+ "scale is voxels per block (default 16, like vanilla mobs: a pig is about 14 long and 14 tall). The hitbox "
+				+ "comes from the model. Up to " + EntityModel.MAX_PARTS + " parts and " + EntityModel.MAX_SPAN + " voxels per side.",
+			"""
+				{"type":"object","properties":{
+				  "id":{"type":"string","description":"Lowercase letters, digits and underscores, e.g. frost_wolf."},
+				  "name":{"type":"string"},
+				  "palette":{"type":"object","additionalProperties":{"type":"string"}},
+				  "parts":{"type":"array","items":{"type":"object","properties":{
+				    "name":{"type":"string"},
+				    "role":{"type":"string","enum":["body","head","leg","arm","wing","tail","none"]},
+				    "origin":{"type":"array","items":{"type":"integer"}},
+				    "pivot":{"type":"array","items":{"type":"number"}},
+				    "phase":{"type":"integer","description":"legs and arms: 0 or 1."},
+				    "layers":{"type":"array","items":{"type":"array","items":{"type":"string"}}}
+				  },"required":["origin","layers"]}},
+				  "scale":{"type":"number"},
+				  "properties":{"type":"object","properties":{
+				    "health":{"type":"number","description":"Default 10 (a pig); a zombie has 20."},
+				    "speed":{"type":"number","description":"Default 0.25 (a pig); 0.35 is quick."},
+				    "behavior":{"type":"string","enum":["passive","neutral","hostile"],"description":"passive flees when hurt, neutral fights back, hostile hunts players."},
+				    "attack_damage":{"type":"number"},
+				    "movement":{"type":"string","enum":["walk","fly"]},
+				    "sounds":{"type":"string","description":"Borrow a vanilla mob's sounds, e.g. pig, wolf, parrot, zombie."},
+				    "drops":{"type":"array","items":{"type":"string"},"description":"e.g. \\"minecraft:bone 0-2\\", \\"custom:ruby\\"."},
+				    "interact_commands":{"type":"array","items":{"type":"string"},"description":"Run as the player when they right-click it, at the creature (~ ~ ~)."}
+				  }}
+				},"required":["id","name","palette","parts"]}""",
+			this::defineEntity);
+
+		register("spawn_entity",
+			"Spawn custom creatures made with define_entity. Default: one, 3 blocks in front of the requesting player.",
+			"""
+				{"type":"object","properties":{
+				  "id":{"type":"string"},
+				  "count":{"type":"integer","description":"1 to 20."},
+				  "position":%s,
+				  "dimension":%s
+				},"required":["id"]}""".formatted(POS_SCHEMA, DIM_SCHEMA),
+			this::spawnEntity);
+
+		register("give_item",
+			"Give a player copies of a custom item or block made with define_item or define_block.",
+			"""
+				{"type":"object","properties":{
+				  "id":{"type":"string"},
+				  "count":{"type":"integer","description":"Default 1."},
+				  "player":{"type":"string","description":"Defaults to the player who sent the current message."}
+				},"required":["id"]}""",
+			this::giveItem);
+
+		register("view_item",
+			"See a picture of a custom item's, block's or creature's voxel model (creatures at rest), drawn like view_build (flat-shaded cubes, see-through colors shown "
+				+ "solid). Use it to check a new design before giving it out.",
+			"""
+				{"type":"object","properties":{
+				  "id":{"type":"string"},
+				  "views":{"type":"array","items":{"type":"string","enum":["southeast","southwest","northwest","northeast","top"]}}
+				},"required":["id"]}""",
+			this::viewItem);
+
 		register("scan_area",
 			"Read the blocks in a box (inclusive corners) in the same layer/row/palette format place_blueprint uses, "
 				+ "with origin at the minimum corner. '.' = air. Use it to inspect terrain, existing builds, or verify your work. "
@@ -507,6 +641,13 @@ public class GameTools {
 			BlockState cached = cache.get(s);
 			if (cached != null) return cached;
 			String norm = s.trim();
+			if (norm.startsWith("custom:")) {
+				JsonObject def = CustomItems.DEFS.get(norm.substring("custom:".length()));
+				if (!CustomBlocks.isBlock(def)) throw new ToolError("No custom block " + norm + " (make one with define_block)");
+				BlockState st = CustomBlocks.state(def);
+				cache.put(s, st);
+				return st;
+			}
 			try {
 				BlockState st = BlockStateParser.parseForBlock(lookup, norm, false).blockState();
 				cache.put(s, st);
@@ -668,7 +809,7 @@ public class GameTools {
 			sb.append(String.format(Locale.ROOT, "Facing: %s (yaw %.0f, pitch %.0f)%n", p.getDirection().getSerializedName(), p.getYRot(), p.getXRot()));
 			HitResult hit = p.pick(64, 1.0f, false);
 			if (hit instanceof BlockHitResult bh && hit.getType() == HitResult.Type.BLOCK) {
-				sb.append("Looking at: ").append(BlockStateParser.serialize(level.getBlockState(bh.getBlockPos())))
+				sb.append("Looking at: ").append(blockName(level.getBlockState(bh.getBlockPos()), false))
 					.append(" at ").append(fmt(bh.getBlockPos())).append(" (").append(bh.getDirection().getSerializedName()).append(" face)\n");
 			} else {
 				sb.append("Looking at: nothing within 64 blocks\n");
@@ -701,7 +842,8 @@ public class GameTools {
 			List<Entity> ents = level.getEntities(p, p.getBoundingBox().inflate(radius), e -> e.isAlive());
 			Map<String, List<Entity>> byType = new TreeMap<>();
 			for (Entity e : ents) {
-				byType.computeIfAbsent(BuiltInRegistries.ENTITY_TYPE.getKey(e.getType()).toString(), k -> new ArrayList<>()).add(e);
+				String type = e instanceof CustomEntities.CustomEntity ce ? "custom:" + ce.definitionId() : BuiltInRegistries.ENTITY_TYPE.getKey(e.getType()).toString();
+				byType.computeIfAbsent(type, k -> new ArrayList<>()).add(e);
 			}
 			sb.append("Nearby entities (within ").append(radius).append("): ");
 			if (byType.isEmpty()) sb.append("none");
@@ -726,6 +868,8 @@ public class GameTools {
 
 	private static String describe(ItemStack s) {
 		if (s.isEmpty()) return "nothing";
+		String custom = s.get(CustomItems.DEFINITION);
+		if (custom != null) return "custom item " + custom + " x" + s.getCount();
 		return BuiltInRegistries.ITEM.getKey(s.getItem()) + " x" + s.getCount();
 	}
 
@@ -733,16 +877,22 @@ public class GameTools {
 
 	private String runCommands(JsonObject args) throws ToolError {
 		if (!args.has("commands") || !args.get("commands").isJsonArray()) throw new ToolError("commands must be an array of strings");
-		JsonArray cmds = args.getAsJsonArray("commands");
-		if (cmds.size() > 2000) throw new ToolError("At most 2000 commands per call.");
-		ServerPlayer p = player(args, "player");
+		JsonArray arr = args.getAsJsonArray("commands");
+		if (arr.size() > 2000) throw new ToolError("At most 2000 commands per call.");
+		List<String> cmds = new ArrayList<>();
+		for (JsonElement e : arr) cmds.add(e.getAsString());
+		return execute(player(args, "player"), cmds);
+	}
+
+	/** Run commands in order as the player (or the server, if null) at the configured permission level. Server thread. */
+	String execute(ServerPlayer p, List<String> cmds) {
 		CommandSourceStack base = (p != null ? p.createCommandSourceStack() : server.createCommandSourceStack())
 			.withPermission(LevelBasedPermissionSet.forLevel(PermissionLevel.byId(Math.max(0, Math.min(4, cfg.commandPermissionLevel)))));
 
 		StringBuilder sb = new StringBuilder();
 		int failures = 0;
 		for (int i = 0; i < cmds.size(); i++) {
-			String cmd = cmds.get(i).getAsString().trim();
+			String cmd = cmds.get(i).trim();
 			List<String> out = new ArrayList<>();
 			boolean[] result = {false, false}; // [called, success]
 			int[] value = {0};
@@ -1183,6 +1333,228 @@ public class GameTools {
 		return new String(Character.toChars(0x00C0 + index - PALETTE_CHARS.length()));
 	}
 
+	// ---------------------------------------------------------------- custom items
+
+	private String defineItem(JsonObject args) throws ToolError {
+		String id = args.has("id") ? args.get("id").getAsString() : "";
+		if (!id.matches("[a-z0-9_]{1,40}")) throw new ToolError("id must be 1 to 40 lowercase letters, digits or underscores");
+		String style = args.has("style") ? args.get("style").getAsString() : "item";
+		if (!List.of("item", "handheld", "block").contains(style)) throw new ToolError("style must be item, handheld or block");
+		JsonObject model;
+		if (args.has("pixels")) {
+			model = VoxelModel.fromPixels(args.getAsJsonObject("palette"), args.getAsJsonArray("pixels"), optInt(args, "thickness", 1));
+		} else if (args.has("layers")) {
+			model = new JsonObject();
+			model.add("palette", args.get("palette"));
+			model.add("layers", args.get("layers"));
+		} else {
+			throw new ToolError("Give the model as pixels or layers");
+		}
+		VoxelModel parsed;
+		try {
+			parsed = VoxelModel.parse(model);
+		} catch (IllegalArgumentException | IllegalStateException | ClassCastException e) {
+			throw new ToolError("Bad model: " + e.getMessage());
+		}
+		JsonObject props = args.has("properties") ? args.getAsJsonObject("properties") : new JsonObject();
+		if (props.has("rarity") && !List.of("common", "uncommon", "rare", "epic").contains(props.get("rarity").getAsString())) {
+			throw new ToolError("rarity must be common, uncommon, rare or epic");
+		}
+
+		JsonObject def = new JsonObject();
+		def.addProperty("id", id);
+		def.addProperty("name", args.get("name").getAsString());
+		if (args.has("description")) def.addProperty("description", args.get("description").getAsString());
+		def.addProperty("style", style);
+		def.add("model", model);
+		def.add("properties", props);
+		if (CustomBlocks.isBlock(CustomItems.DEFS.get(id))) throw new ToolError(id + " is already a custom block; pick another id");
+		boolean existed = CustomItems.DEFS.containsKey(id);
+		CustomItems.define(server, def);
+		return (existed ? "Updated" : "Defined") + " custom item " + id + " (" + parsed.sx + "x" + parsed.sy + "x" + parsed.sz
+			+ " voxels). Hand it out with give_item, or check it with view_item.";
+	}
+
+	private String defineBlock(JsonObject args) throws ToolError {
+		String id = args.has("id") ? args.get("id").getAsString() : "";
+		if (!id.matches("[a-z0-9_]{1,40}")) throw new ToolError("id must be 1 to 40 lowercase letters, digits or underscores");
+		JsonObject old = CustomItems.DEFS.get(id);
+		if (old != null && !CustomBlocks.isBlock(old)) throw new ToolError(id + " is already a custom item; pick another id");
+		JsonObject model = new JsonObject();
+		model.add("palette", args.get("palette"));
+		if (args.has("faces")) model.add("faces", args.get("faces"));
+		else if (args.has("layers")) model.add("layers", args.get("layers"));
+		else throw new ToolError("Give the block as faces (a painted cube) or layers (a voxel shape)");
+		VoxelModel parsed;
+		try {
+			parsed = VoxelModel.parse(model);
+		} catch (IllegalArgumentException | IllegalStateException | ClassCastException e) {
+			throw new ToolError("Bad model: " + e.getMessage());
+		}
+		if (parsed.sx > 16 || parsed.sy > 16 || parsed.sz > 16) throw new ToolError("Blocks are at most 16 voxels per side");
+		JsonObject props = args.has("properties") ? args.getAsJsonObject("properties") : new JsonObject();
+		if (props.has("sound") && !CustomBlocks.SOUNDS.contains(props.get("sound").getAsString())) {
+			throw new ToolError("sound must be one of " + String.join(", ", CustomBlocks.SOUNDS));
+		}
+		if (props.has("collision") && !List.of("model", "full", "none").contains(props.get("collision").getAsString())) {
+			throw new ToolError("collision must be model, full or none");
+		}
+		int slot = CustomBlocks.allocateSlot(id);
+		if (slot < 0) throw new ToolError("This world already has " + CustomBlocks.SLOTS + " custom blocks; redefine an existing one instead");
+
+		JsonObject def = new JsonObject();
+		def.addProperty("id", id);
+		def.addProperty("kind", "block");
+		def.addProperty("slot", slot);
+		def.addProperty("name", args.get("name").getAsString());
+		if (args.has("description")) def.addProperty("description", args.get("description").getAsString());
+		def.addProperty("style", "block");
+		def.add("model", model);
+		def.add("properties", props);
+		CustomItems.define(server, def);
+		return (old != null ? "Updated" : "Defined") + " custom block " + id + ". Place it as custom:" + id
+			+ " with any placement tool, or give it with give_item.";
+	}
+
+	private String defineEntity(JsonObject args) throws ToolError {
+		String id = args.has("id") ? args.get("id").getAsString() : "";
+		if (!id.matches("[a-z0-9_]{1,40}")) throw new ToolError("id must be 1 to 40 lowercase letters, digits or underscores");
+		JsonObject old = CustomItems.DEFS.get(id);
+		if (old != null && !CustomEntities.isEntity(old)) throw new ToolError(id + " is already a custom item or block; pick another id");
+		JsonObject model = new JsonObject();
+		model.add("palette", args.get("palette"));
+		model.add("parts", args.get("parts"));
+		float scale = args.has("scale") ? args.get("scale").getAsFloat() : 16;
+		EntityModel parsed;
+		try {
+			parsed = EntityModel.parse(model, scale);
+		} catch (IllegalArgumentException | IllegalStateException | ClassCastException e) {
+			throw new ToolError("Bad model: " + e.getMessage());
+		}
+		JsonObject props = args.has("properties") ? args.getAsJsonObject("properties") : new JsonObject();
+		if (props.has("drops")) {
+			for (JsonElement e : props.getAsJsonArray("drops")) {
+				String drop = e.getAsString().trim().split("\\s+")[0];
+				if (CustomEntities.CustomEntity.dropStack(drop, 1) == null) throw new ToolError("Unknown drop item " + drop);
+			}
+		}
+		JsonObject def = new JsonObject();
+		def.addProperty("id", id);
+		def.addProperty("kind", "entity");
+		def.addProperty("name", args.get("name").getAsString());
+		def.addProperty("scale", scale);
+		def.add("model", model);
+		def.add("properties", props);
+		CustomItems.define(server, def);
+		return String.format(Locale.ROOT, "%s custom creature %s (%d parts, %.2f x %.2f blocks). Spawn it with spawn_entity, or check it with view_item.",
+			old != null ? "Updated" : "Defined", id, parsed.parts.size(), parsed.width(), parsed.height());
+	}
+
+	private String spawnEntity(JsonObject args) throws ToolError {
+		String id = args.has("id") ? args.get("id").getAsString() : "";
+		JsonObject def = CustomItems.DEFS.get(id);
+		if (!CustomEntities.isEntity(def)) throw new ToolError("No custom creature " + id + " (make one with define_entity)");
+		int count = Math.max(1, Math.min(20, optInt(args, "count", 1)));
+		ServerLevel level = level(args);
+		net.minecraft.world.phys.Vec3 at;
+		if (args.has("position")) {
+			BlockPos p = pos(args, "position");
+			at = new net.minecraft.world.phys.Vec3(p.getX() + 0.5, p.getY(), p.getZ() + 0.5);
+		} else {
+			ServerPlayer p = player(new JsonObject(), "player");
+			if (p == null) throw new ToolError("Give a position (no player to spawn it near)");
+			net.minecraft.world.phys.Vec3 look = p.getLookAngle().multiply(1, 0, 1).normalize().scale(3);
+			at = p.position().add(look);
+		}
+		int n = CustomEntities.spawn(level, def, at, count).size();
+		return String.format(Locale.ROOT, "Spawned %d %s at %.1f %.1f %.1f.", n, def.get("name").getAsString(), at.x, at.y, at.z);
+	}
+
+	/** How Claude names a block state: custom:<id> for custom blocks, the usual id[properties] otherwise. */
+	static String blockName(BlockState st, boolean idsOnly) {
+		if (st.is(CustomBlocks.BLOCK)) {
+			String id = CustomBlocks.idForSlot(st.getValue(CustomBlocks.VARIANT));
+			return id == null ? "custom:unknown" : "custom:" + id;
+		}
+		return idsOnly ? BuiltInRegistries.BLOCK.getKey(st.getBlock()).toString() : BlockStateParser.serialize(st);
+	}
+
+	private static String id(JsonObject def) {
+		return def.get("id").getAsString();
+	}
+
+	private JsonObject itemDef(JsonObject args) throws ToolError {
+		String id = args.has("id") ? args.get("id").getAsString() : "";
+		JsonObject def = CustomItems.DEFS.get(id);
+		if (def == null) {
+			throw new ToolError("No custom item " + id + ". Defined: " + (CustomItems.DEFS.isEmpty() ? "none" : String.join(", ", new java.util.TreeSet<>(CustomItems.DEFS.keySet()))));
+		}
+		return def;
+	}
+
+	private String giveItem(JsonObject args) throws ToolError {
+		JsonObject def = itemDef(args);
+		if (CustomEntities.isEntity(def)) throw new ToolError(id(def) + " is a creature; use spawn_entity");
+		ServerPlayer p = player(args, "player");
+		if (p == null) throw new ToolError("No player to give it to");
+		ItemStack stack = CustomItems.stack(def, optInt(args, "count", 1));
+		int n = stack.getCount();
+		if (!p.getInventory().add(stack)) p.drop(stack, false, net.minecraft.util.Prediction.SERVER_ONLY); // full inventory: drop it at their feet
+		return "Gave " + n + " " + def.get("name").getAsString() + " to " + p.getScoreboardName() + ".";
+	}
+
+	private CompletableFuture<Images> viewItem(JsonObject args) throws ToolError {
+		JsonObject def = itemDef(args);
+		List<String> views = new ArrayList<>();
+		if (args.has("views") && args.get("views").isJsonArray()) for (JsonElement e : args.getAsJsonArray("views")) views.add(e.getAsString());
+		if (views.isEmpty()) views.add("southeast");
+		if (views.size() > 4) throw new ToolError("At most 4 views per call.");
+		for (String v : views) if (!v.equals("top")) view(v);
+		int[] argb;
+		int sx, sy, sz;
+		if (CustomEntities.isEntity(def)) {
+			EntityModel em = CustomEntities.model(id(def));
+			if (em == null) throw new ToolError("That creature's model is broken; redefine it");
+			argb = em.flatten();
+			sx = em.maxX - em.minX;
+			sy = em.maxY - em.minY;
+			sz = em.maxZ - em.minZ;
+		} else {
+			VoxelModel m = VoxelModel.parse(def.getAsJsonObject("model"));
+			argb = m.argb;
+			sx = m.sx;
+			sy = m.sy;
+			sz = m.sz;
+		}
+		int[] rgb = new int[argb.length];
+		for (int i = 0; i < rgb.length; i++) {
+			if (argb[i] == 0 || (argb[i] >>> 24) == 0) continue;
+			rgb[i] = Math.max(1, argb[i] & 0xFFFFFF); // 0 means empty to the renderer, so keep black visible
+		}
+		Renderer.Snapshot snap = new Renderer.Snapshot(rgb, sx, sy, sz);
+		String header = def.get("name").getAsString() + " (" + sx + "x" + sy + "x" + sz + " voxels)."
+			+ (CustomEntities.isEntity(def) ? " The creature faces south (+z) in these pictures." : "");
+		return CompletableFuture.supplyAsync(() -> render(snap, views, header));
+	}
+
+	private static Images render(Renderer.Snapshot snap, List<String> views, String header) {
+		List<byte[]> pngs = new ArrayList<>();
+		StringBuilder text = new StringBuilder(header);
+		for (int i = 0; i < views.size(); i++) {
+			String name = views.get(i);
+			text.append("\nPicture ").append(i + 1).append(": ");
+			if (name.equals("top")) {
+				pngs.add(Renderer.png(Renderer.top(snap)));
+				text.append("top view, north up and east to the right; higher blocks are brighter.");
+			} else {
+				Renderer.View view = Renderer.View.valueOf(name.toUpperCase(Locale.ROOT));
+				pngs.add(Renderer.png(Renderer.isometric(snap, view)));
+				text.append("isometric ").append(view.caption).append('.');
+			}
+		}
+		return new Images(pngs, text.toString());
+	}
+
 	private static final long MAX_VIEW_VOLUME = 1_000_000;
 
 	private CompletableFuture<Images> viewBuild(JsonObject args) throws ToolError {
@@ -1202,32 +1574,30 @@ public class GameTools {
 		// Read the blocks on the server thread once builds are done; draw the pictures off it.
 		return builds.idle().thenApplyAsync(v -> {
 			int[] colors = new int[(int) volume];
+			Map<Integer, Integer> customColors = new HashMap<>();
 			BlockPos.MutableBlockPos mp = new BlockPos.MutableBlockPos();
 			for (int y = 0; y < sy; y++) for (int z = 0; z < sz; z++) for (int x = 0; x < sx; x++) {
 				mp.set(x0 + x, y0 + y, z0 + z);
 				BlockState st = level.getBlockState(mp);
 				if (st.isAir() || (!st.liquid() && st.getCollisionShape(level, mp).isEmpty())) continue;
-				int rgb = st.getMapColor(level, mp).col;
+				int rgb = st.is(CustomBlocks.BLOCK) ? customColors.computeIfAbsent(st.getValue(CustomBlocks.VARIANT), GameTools::customBlockColor)
+					: st.getMapColor(level, mp).col;
 				if (rgb != 0) colors[(y * sz + z) * sx + x] = rgb;
 			}
 			return new Renderer.Snapshot(colors, sx, sy, sz);
-		}, server).thenApplyAsync(snap -> {
-			List<byte[]> pngs = new ArrayList<>();
-			StringBuilder text = new StringBuilder("Box x " + x0 + ".." + (x0 + sx - 1) + ", y " + y0 + ".." + y1 + ", z " + z0 + ".." + (z0 + sz - 1) + ".");
-			for (int i = 0; i < views.size(); i++) {
-				String name = views.get(i);
-				text.append("\nPicture ").append(i + 1).append(": ");
-				if (name.equals("top")) {
-					pngs.add(Renderer.png(Renderer.top(snap)));
-					text.append("top view, north up and east to the right; higher blocks are brighter.");
-				} else {
-					Renderer.View view = Renderer.View.valueOf(name.toUpperCase(Locale.ROOT));
-					pngs.add(Renderer.png(Renderer.isometric(snap, view)));
-					text.append("isometric ").append(view.caption).append('.');
-				}
-			}
-			return new Images(pngs, text.toString());
-		});
+		}, server).thenApplyAsync(snap -> render(snap, views,
+			"Box x " + x0 + ".." + (x0 + sx - 1) + ", y " + y0 + ".." + y1 + ", z " + z0 + ".." + (z0 + sz - 1) + "."));
+	}
+
+	/** A custom block's color in pictures: the average of its model's colors. */
+	private static int customBlockColor(int slot) {
+		String id = CustomBlocks.idForSlot(slot);
+		JsonObject def = id == null ? null : CustomItems.DEFS.get(id);
+		try {
+			return def == null ? 0x808080 : VoxelModel.parse(def.getAsJsonObject("model")).averageColor() & 0xFFFFFF;
+		} catch (RuntimeException e) {
+			return 0x808080;
+		}
 	}
 
 	private static Renderer.View view(String name) throws ToolError {
@@ -1266,7 +1636,7 @@ public class GameTools {
 						continue;
 					}
 					allAir = false;
-					String key = idsOnly ? BuiltInRegistries.BLOCK.getKey(st.getBlock()).toString() : BlockStateParser.serialize(st);
+					String key = blockName(st, idsOnly);
 					row.append(palette.computeIfAbsent(key, k -> paletteChar(palette.size())));
 				}
 				layer.append("  ").append(row).append('\n');
@@ -1310,7 +1680,7 @@ public class GameTools {
 				min = Math.min(min, top);
 				max = Math.max(max, top);
 				BlockState st = level.getBlockState(mp.set(x, top, z));
-				String key = BuiltInRegistries.BLOCK.getKey(st.getBlock()).toString();
+				String key = blockName(st, true);
 				if (hRow.length() > 0) hRow.append(' ');
 				hRow.append(top);
 				bRow.append(palette.computeIfAbsent(key, k -> paletteChar(palette.size())));
