@@ -369,6 +369,7 @@ public class ClaudeBridge {
 				activity = switch (name == null ? "" : name) {
 					case "get_context" -> "Looking around";
 					case "get_terrain", "scan_area" -> "Surveying";
+					case "view_build" -> "Inspecting";
 					case "run_commands" -> "Running commands";
 					case "undo" -> "Undoing";
 					case "wait_for_builds" -> "Building";

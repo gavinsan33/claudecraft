@@ -68,6 +68,9 @@ public class GameTools {
 
 	record Tool(String name, String description, JsonObject schema, Handler handler) {}
 
+	/** A tool result with pictures: PNGs shown to Claude, followed by the text. */
+	record Images(List<byte[]> pngs, String text) {}
+
 	private final MinecraftServer server;
 	private final Config cfg;
 	private final UndoHistory undo;
@@ -117,6 +120,7 @@ public class GameTools {
 	public JsonObject call(String name, JsonObject args) {
 		Tool tool = tools.get(name);
 		String text;
+		List<byte[]> images = List.of();
 		boolean error = false;
 		if (tool == null) {
 			text = "Unknown tool: " + name;
@@ -133,7 +137,13 @@ public class GameTools {
 					}
 				}).get(120, TimeUnit.SECONDS);
 				// Animated builds complete on a later tick; wait here (off the server thread) until they're done.
-				text = result instanceof CompletableFuture<?> f ? (String) f.get(30, TimeUnit.MINUTES) : (String) result;
+				Object out = result instanceof CompletableFuture<?> f ? f.get(30, TimeUnit.MINUTES) : result;
+				if (out instanceof Images im) {
+					images = im.pngs();
+					text = im.text();
+				} else {
+					text = (String) out;
+				}
 			} catch (ExecutionException e) {
 				Throwable cause = e.getCause() instanceof WrappedException w ? w.getCause() : e.getCause();
 				if (cause instanceof CompletionException ce && ce.getCause() != null) cause = ce.getCause();
@@ -158,6 +168,13 @@ public class GameTools {
 		if (!finished.isEmpty()) text += "\n\nFinished in the background:" + finished;
 		JsonObject result = new JsonObject();
 		JsonArray content = new JsonArray();
+		for (byte[] png : images) {
+			JsonObject img = new JsonObject();
+			img.addProperty("type", "image");
+			img.addProperty("data", java.util.Base64.getEncoder().encodeToString(png));
+			img.addProperty("mimeType", "image/png");
+			content.add(img);
+		}
 		JsonObject c = new JsonObject();
 		c.addProperty("type", "text");
 		c.addProperty("text", text);
@@ -383,6 +400,22 @@ public class GameTools {
 			"""
 				{"type":"object","properties":{}}""",
 			args -> afterBuilds(() -> "All builds are finished."));
+
+		register("view_build",
+			"See a rendered picture of a box (inclusive corners), to judge how a build looks: proportions, silhouette, colors, "
+				+ "symmetry, gaps. Blocks are drawn as flat-shaded cubes in their map colors, without textures: slabs, stairs and "
+				+ "fences look like full cubes, while glass, plants, torches and other blocks you can walk through aren't drawn. "
+				+ "views: southeast, southwest, northwest, northeast (isometric, named for where the camera stands) and top "
+				+ "(plan view, north up, higher blocks brighter). Default: southeast. Include a layer of ground under the build. "
+				+ "Each picture costs about a thousand tokens of context, so use one or two views per look. Waits for queued "
+				+ "builds to finish first.",
+			"""
+				{"type":"object","properties":{
+				  "from":%s,"to":%s,
+				  "views":{"type":"array","items":{"type":"string","enum":["southeast","southwest","northwest","northeast","top"]}},
+				  "dimension":%s
+				},"required":["from","to"]}""".formatted(POS_SCHEMA, POS_SCHEMA, DIM_SCHEMA),
+			this::viewBuild);
 
 		register("scan_area",
 			"Read the blocks in a box (inclusive corners) in the same layer/row/palette format place_blueprint uses, "
@@ -1146,6 +1179,61 @@ public class GameTools {
 	private static String paletteChar(int index) {
 		if (index < PALETTE_CHARS.length()) return String.valueOf(PALETTE_CHARS.charAt(index));
 		return new String(Character.toChars(0x00C0 + index - PALETTE_CHARS.length()));
+	}
+
+	private static final long MAX_VIEW_VOLUME = 1_000_000;
+
+	private CompletableFuture<Images> viewBuild(JsonObject args) throws ToolError {
+		ServerLevel level = level(args);
+		BlockPos a = pos(args, "from"), b = pos(args, "to");
+		List<String> views = new ArrayList<>();
+		if (args.has("views") && args.get("views").isJsonArray()) for (JsonElement e : args.getAsJsonArray("views")) views.add(e.getAsString());
+		if (views.isEmpty()) views.add("southeast");
+		if (views.size() > 4) throw new ToolError("At most 4 views per call.");
+		for (String v : views) if (!v.equals("top")) view(v);
+		int x0 = Math.min(a.getX(), b.getX()), z0 = Math.min(a.getZ(), b.getZ());
+		int y0 = Math.max(level.getMinY(), Math.min(a.getY(), b.getY())), y1 = Math.min(level.getMaxY(), Math.max(a.getY(), b.getY()));
+		int sx = Math.abs(a.getX() - b.getX()) + 1, sy = y1 - y0 + 1, sz = Math.abs(a.getZ() - b.getZ()) + 1;
+		long volume = (long) sx * sy * sz;
+		if (volume > MAX_VIEW_VOLUME) throw new ToolError("Box too big to view (" + volume + " blocks, max " + MAX_VIEW_VOLUME + ").");
+
+		// Read the blocks on the server thread once builds are done; draw the pictures off it.
+		return builds.idle().thenApplyAsync(v -> {
+			int[] colors = new int[(int) volume];
+			BlockPos.MutableBlockPos mp = new BlockPos.MutableBlockPos();
+			for (int y = 0; y < sy; y++) for (int z = 0; z < sz; z++) for (int x = 0; x < sx; x++) {
+				mp.set(x0 + x, y0 + y, z0 + z);
+				BlockState st = level.getBlockState(mp);
+				if (st.isAir() || (!st.liquid() && st.getCollisionShape(level, mp).isEmpty())) continue;
+				int rgb = st.getMapColor(level, mp).col;
+				if (rgb != 0) colors[(y * sz + z) * sx + x] = rgb;
+			}
+			return new Renderer.Snapshot(colors, sx, sy, sz);
+		}, server).thenApplyAsync(snap -> {
+			List<byte[]> pngs = new ArrayList<>();
+			StringBuilder text = new StringBuilder("Box x " + x0 + ".." + (x0 + sx - 1) + ", y " + y0 + ".." + y1 + ", z " + z0 + ".." + (z0 + sz - 1) + ".");
+			for (int i = 0; i < views.size(); i++) {
+				String name = views.get(i);
+				text.append("\nPicture ").append(i + 1).append(": ");
+				if (name.equals("top")) {
+					pngs.add(Renderer.png(Renderer.top(snap)));
+					text.append("top view, north up and east to the right; higher blocks are brighter.");
+				} else {
+					Renderer.View view = Renderer.View.valueOf(name.toUpperCase(Locale.ROOT));
+					pngs.add(Renderer.png(Renderer.isometric(snap, view)));
+					text.append("isometric ").append(view.caption).append('.');
+				}
+			}
+			return new Images(pngs, text.toString());
+		});
+	}
+
+	private static Renderer.View view(String name) throws ToolError {
+		try {
+			return Renderer.View.valueOf(name.toUpperCase(Locale.ROOT));
+		} catch (IllegalArgumentException e) {
+			throw new ToolError("Unknown view '" + name + "' (southeast, southwest, northwest, northeast, top)");
+		}
 	}
 
 	private String scanArea(JsonObject args) throws ToolError {

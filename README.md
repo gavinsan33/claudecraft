@@ -32,6 +32,7 @@ Claude's replies ◄── stream-json ◄─┘
 | `naturalize` | Grass on top, then dirt, then stone (`//naturalize`) |
 | `fill_region` | Box fill: solid, hollow, outline or walls, with an optional replace filter |
 | `place_blocks` | Individual blocks at exact coordinates |
+| `view_build` | Rendered picture of an area (isometric from any of four corners, or top-down) so Claude can see how its build looks |
 | `wait_for_builds` | Wait for queued builds to finish and get their results |
 | `run_commands` | Any command, run as the requesting player (`@s`, `~`), at a capped permission level |
 | `undo` | Revert the last turn's block changes |
