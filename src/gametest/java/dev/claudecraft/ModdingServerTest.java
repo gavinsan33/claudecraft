@@ -369,4 +369,24 @@ public class ModdingServerTest {
 		tool("delete_definition", "{\"id\":\"g_void\"}");
 		h.succeed();
 	}
+
+	@GameTest
+	public void solidCustomBlocksHideFacesAndBlockLight(GameTestHelper h) {
+		// A painted cube like a flag block: every face full of opaque pixels.
+		StringBuilder rows = new StringBuilder();
+		for (int r = 0; r < 16; r++) rows.append(r > 0 ? "," : "").append('"').append(r % 4 < 2 ? "wwwwwwwwwwwwwwww" : "bbbbbbbbbbbbbbbb").append('"');
+		tool("define_block", "{\"id\":\"z_flag\",\"name\":\"Flag\",\"palette\":{\"w\":\"#FFFFFF\",\"b\":\"#0038B8\"},\"faces\":{\"all\":[" + rows + "]}}");
+		tool("define_block", "{\"id\":\"z_glass\",\"name\":\"Glass\",\"palette\":{\"g\":\"#6080C0FF\"},\"faces\":{\"all\":["
+			+ rows.toString().replace('w', 'g').replace('b', 'g') + "]}}");
+		block("z_lamp", "{}");
+		BlockState flag = CustomBlocks.state(def("z_flag")), lamp = CustomBlocks.state(def("z_lamp")), glass = CustomBlocks.state(def("z_glass"));
+		h.assertTrue(flag.getFaceOcclusionShape(Direction.UP) == net.minecraft.world.phys.shapes.Shapes.block(), "a solid design hides the faces next to it");
+		h.assertTrue(!Block.shouldRenderFace(flag, flag, Direction.EAST), "the face between two flag blocks isn't drawn");
+		h.assertTrue(!Block.shouldRenderFace(Blocks.STONE.defaultBlockState(), flag, Direction.EAST), "nor a stone face against one");
+		h.assertTrue(flag.getLightDampening() == 15 && !flag.propagatesSkylightDown(), "and it blocks light like stone");
+		h.assertTrue(Block.shouldRenderFace(flag, lamp, Direction.EAST) && lamp.propagatesSkylightDown(), "small shapes like lamps don't hide anything");
+		h.assertTrue(!Block.shouldRenderFace(glass, glass, Direction.EAST) && Block.shouldRenderFace(flag, glass, Direction.EAST),
+			"see-through cubes hide faces only between their own kind, like glass");
+		h.succeed();
+	}
 }

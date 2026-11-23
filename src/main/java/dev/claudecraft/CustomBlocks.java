@@ -102,7 +102,7 @@ public final class CustomBlocks {
 	static void register() {
 		ResourceKey<Block> bk = ResourceKey.create(Registries.BLOCK, CustomItems.id("custom_block"));
 		BLOCK = Registry.register(BuiltInRegistries.BLOCK, bk, new CustomBlock(BlockBehaviour.Properties.of().setId(bk)
-			.strength(1.5f, 6f).dynamicShape().noOcclusion().lightLevel(s -> s.getValue(LIGHT))));
+			.strength(1.5f, 6f).dynamicShape().lightLevel(s -> s.getValue(LIGHT))));
 		ResourceKey<Item> ik = ResourceKey.create(Registries.ITEM, CustomItems.id("custom_block"));
 		ITEM = Registry.register(BuiltInRegistries.ITEM, ik, new CustomBlockItem(BLOCK, new Item.Properties().setId(ik).useBlockDescriptionPrefix()));
 		STORAGE = Registry.register(BuiltInRegistries.BLOCK_ENTITY_TYPE, CustomItems.id("storage"), new BlockEntityType<>(Storage::new, Set.of(BLOCK)));
@@ -120,6 +120,47 @@ public final class CustomBlocks {
 		}
 		slotIds = ids;
 		SHAPES.clear();
+		OPAQUE.clear();
+		// Minecraft works out once, when it starts, which block states hide their neighbors' faces and block light,
+		// before any design exists. Work it out again now that the designs have changed.
+		if (BLOCK != null) for (BlockState st : BLOCK.getStateDefinition().getPossibleStates()) st.initCache();
+	}
+
+	/** Solid cubes, by definition id: 16 voxels each way with every voxel on the outside fully opaque. */
+	private static final Map<String, Boolean> OPAQUE = new ConcurrentHashMap<>();
+
+	/**
+	 * Is this design a solid, opaque cube? Those hide the faces of blocks next to them and block light, like stone.
+	 * Without this, a wall (or a whole dimension's underground) made of custom blocks draws every hidden face of
+	 * every block, which can run the game out of memory.
+	 */
+	static boolean opaqueCube(JsonObject def) {
+		if (def == null) return false;
+		return OPAQUE.computeIfAbsent(def.get("id").getAsString(), k -> {
+			VoxelModel m;
+			try {
+				m = VoxelModel.parse(def.getAsJsonObject("model"));
+			} catch (RuntimeException e) {
+				return false;
+			}
+			if (m.sx != 16 || m.sy != 16 || m.sz != 16) return false;
+			for (int a = 0; a < 16; a++) for (int b = 0; b < 16; b++) {
+				int[][] outside = {{0, a, b}, {15, a, b}, {a, 0, b}, {a, 15, b}, {a, b, 0}, {a, b, 15}};
+				for (int[] v : outside) if ((m.at(v[0], v[1], v[2]) >>> 24) != 0xFF) return false;
+			}
+			return true;
+		});
+	}
+
+	/** A design that fills its whole block (glass-like ones included), so two of them side by side hide their shared faces. */
+	static boolean fullSize(JsonObject def) {
+		if (def == null) return false;
+		try {
+			VoxelModel m = VoxelModel.parse(def.getAsJsonObject("model"));
+			return m.sx == 16 && m.sy == 16 && m.sz == 16;
+		} catch (RuntimeException e) {
+			return false;
+		}
 	}
 
 	public static String idForSlot(int slot) {
@@ -309,6 +350,28 @@ public final class CustomBlocks {
 			JsonObject def = definition(state);
 			String collision = props(def).has("collision") ? props(def).get("collision").getAsString() : "model";
 			return collision.equals("full") ? Shapes.block() : shape(def, state.getValue(FACING));
+		}
+
+		@Override
+		protected VoxelShape getOcclusionShape(BlockState state) {
+			return opaqueCube(definition(state)) ? Shapes.block() : Shapes.empty();
+		}
+
+		@Override
+		protected boolean propagatesSkylightDown(BlockState state) {
+			return !opaqueCube(definition(state));
+		}
+
+		@Override
+		protected int getLightDampening(BlockState state) {
+			return opaqueCube(definition(state)) ? 15 : super.getLightDampening(state);
+		}
+
+		@Override
+		protected boolean skipRendering(BlockState state, BlockState neighbor, Direction direction) {
+			// Like glass: the faces between two of the same full-size design aren't drawn.
+			if (neighbor.is(BLOCK) && neighbor.getValue(VARIANT).equals(state.getValue(VARIANT)) && fullSize(definition(state))) return true;
+			return super.skipRendering(state, neighbor, direction);
 		}
 
 		@Override
