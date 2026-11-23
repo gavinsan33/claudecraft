@@ -634,6 +634,56 @@ public class GameTools {
 				},"required":["id"]}""",
 			this::viewItem);
 
+		register("define_dimension",
+			"Create a whole new dimension, or redesign one by reusing its id. It exists right away, no restart. sky picks the "
+				+ "kind of world: daylight (sun, moon, day and night, weather), cavern (a closed world with a rock ceiling and "
+				+ "dim light, like the Nether) or starry (an endless dark sky, like the End). biome sets its colors (sky, fog, "
+				+ "water, grass, leaves), its weather and which vanilla mobs, trees and plants appear: any vanilla biome, or the "
+				+ "mod's alien (purple sky, teal grass), crimson (red), frozen (white, snowy), toxic (green fog) and golden. "
+				+ "terrain shapes the land; blocks can be vanilla or custom:<id>, so a dimension can be made of your own blocks. "
+				+ "Redesigning changes chunks generated afterwards; reset: true wipes the old terrain so it all regenerates. "
+				+ "Get there with visit_dimension, or in commands as custom:<id> (execute in custom:moon run ...). Portals: a "
+				+ "custom block whose step_commands or use_commands run claude visit <id> (and claude visit overworld to come back).",
+			"""
+				{"type":"object","properties":{
+				  "id":{"type":"string","description":"Lowercase letters, digits and underscores, e.g. moon."},
+				  "name":{"type":"string"},
+				  "description":{"type":"string"},
+				  "sky":{"type":"string","enum":%s,"description":"Default daylight."},
+				  "biome":{"type":"string","description":"e.g. alien, crimson, frozen, toxic, golden, plains, desert, cherry_grove, mushroom_fields, crimson_forest, the_end. Default plains."},
+				  "terrain":{"type":"object","properties":{
+				    "style":{"type":"string","enum":%s,"description":"hills (rolling land, default), mountains (tall ridges), flat, ocean (sea with scattered islands), islands (floating islands over the void), caves (solid rock full of caverns and tunnels; use with the cavern sky), void (nothing; build it yourself)."},
+				    "height":{"type":"integer","description":"Surface level (or the islands' level). Defaults: 64; islands 100; ocean 50."},
+				    "variation":{"type":"number","description":"How far the land rises and falls, in blocks."},
+				    "scale":{"type":"number","description":"Size of hills, islands or caverns, in blocks (bigger is broader)."},
+				    "surface":{"type":"string","description":"Top block, default minecraft:grass_block."},
+				    "under":{"type":"string","description":"Blocks just under the top, default minecraft:dirt."},
+				    "depth":{"type":"integer","description":"How deep the under layer goes, default 3."},
+				    "stone":{"type":"string","description":"Everything deeper, default minecraft:stone."},
+				    "fluid":{"type":"string","description":"Fills below sea_level, default minecraft:water (lava for a molten world)."},
+				    "sea_level":{"type":"integer","description":"Default 62 for hills, mountains and ocean; none otherwise."},
+				    "bedrock":{"type":"boolean"},
+				    "carve_caves":{"type":"boolean","description":"Tunnels under hills and mountains (default true)."},
+				    "decorate":{"type":"boolean","description":"Grow the biome's trees, plants and ores and spawn its animals (default true; void false)."},
+				    "structures":{"type":"boolean","description":"Allow vanilla structures like villages where the biome has them (default false)."},
+				    "height_expression":{"type":"string","description":"Surface height as math over x, z and n (smooth noise, about -1 to 1, at scale), e.g. 70 + 25*n + 10*sin(x/40). Overrides style's height."},
+				    "solid_expression":{"type":"string","description":"Full 3D control: a block is solid where this is true, over x, y, z, n (3D noise at scale) and h (the surface height), e.g. y < h || (y > 140 && y < 150 && n > 0.3) for land with a floating layer."}
+				  }},
+				  "reset":{"type":"boolean","description":"Delete the terrain generated so far so everything regenerates from this design. Players inside are brought back to its new spawn."}
+				},"required":["id","name"]}""".formatted(json(Dimensions.SKIES), json(CustomChunkGenerator.STYLES)),
+			this::defineDimension);
+
+		register("visit_dimension",
+			"Take a player to a dimension (a custom one by id, or overworld, the_nether, the_end), landing on safe ground "
+				+ "near x, z (default: the dimension's center, or the overworld's spawn).",
+			"""
+				{"type":"object","properties":{
+				  "id":{"type":"string"},
+				  "player":{"type":"string","description":"Defaults to the player who sent the current message."},
+				  "x":{"type":"integer"},"z":{"type":"integer"}
+				},"required":["id"]}""",
+			this::visitDimension);
+
 		register("list_definitions",
 			"List this world's custom items, blocks and creatures (id, name and what they do, including recipes), and the "
 				+ "designs saved in the library that any world can load.",
@@ -1732,6 +1782,7 @@ public class GameTools {
 
 	private String giveItem(JsonObject args) throws ToolError {
 		JsonObject def = itemDef(args);
+		if (Dimensions.isDimension(def)) throw new ToolError(id(def) + " is a dimension; use visit_dimension");
 		ServerPlayer p = player(args, "player");
 		if (p == null) throw new ToolError("No player to give it to");
 		ItemStack stack = CustomItems.stack(def, optInt(args, "count", 1));
@@ -1741,9 +1792,61 @@ public class GameTools {
 		return "Gave " + n + " " + what + " to " + p.getScoreboardName() + ".";
 	}
 
+	// ---------------------------------------------------------------- dimensions
+
+	private String defineDimension(JsonObject args) throws ToolError {
+		String id = checkId(args);
+		JsonObject old = CustomItems.DEFS.get(id);
+		if (old != null && !Dimensions.isDimension(old)) throw new ToolError(id + " is already a custom " + kind(old) + "; pick another id");
+		String sky = args.has("sky") ? args.get("sky").getAsString() : "daylight";
+		String biome = args.has("biome") ? args.get("biome").getAsString() : "plains";
+		JsonObject terrain = args.has("terrain") ? args.getAsJsonObject("terrain") : new JsonObject();
+		try {
+			var type = Dimensions.sky(server, sky);
+			Dimensions.biome(server, biome);
+			CustomChunkGenerator.parse(terrain, type.value().minY());
+		} catch (IllegalArgumentException e) {
+			throw new ToolError(e.getMessage());
+		}
+		JsonObject def = new JsonObject();
+		def.addProperty("id", id);
+		def.addProperty("kind", "dimension");
+		def.addProperty("name", args.get("name").getAsString());
+		if (args.has("description")) def.addProperty("description", args.get("description").getAsString());
+		def.addProperty("sky", sky);
+		def.addProperty("biome", biome);
+		def.add("terrain", terrain);
+		CustomItems.define(server, def);
+		boolean reset = args.has("reset") && args.get("reset").getAsBoolean();
+		ServerLevel level;
+		try {
+			level = reset ? Dimensions.reset(server, def) : Dimensions.ensure(server, def);
+		} catch (java.io.IOException | RuntimeException e) {
+			ClaudeCraft.LOGGER.error("Creating dimension {} failed", id, e);
+			throw new ToolError("Couldn't create the dimension: " + e.getMessage());
+		}
+		var spot = Dimensions.safeSpot(level, 0, 0);
+		return String.format(Locale.ROOT, "%s dimension %s (%s sky, %s biome)%s. Its center has ground at %.0f %.0f %.0f. Take players there with "
+				+ "visit_dimension; in commands it's custom:%s (claudecraft:%s), and building tools take dimension %s.",
+			old != null ? "Updated" : "Created", id, sky, biome, reset ? ", with its terrain regenerated" : old != null ? " (only chunks generated from now on use the new terrain; reset: true regenerates everything)" : "",
+			spot.x, spot.y, spot.z, id, id, id);
+	}
+
+	private String visitDimension(JsonObject args) throws ToolError {
+		String name = args.has("id") ? args.get("id").getAsString() : "";
+		ServerLevel level = Dimensions.level(server, name);
+		if (level == null) throw new ToolError("No dimension " + name + " (custom ids, or overworld, the_nether, the_end)");
+		ServerPlayer p = player(args, "player");
+		if (p == null) throw new ToolError("No player to send");
+		BlockPos near = args.has("x") && args.has("z") ? new BlockPos(args.get("x").getAsInt(), 0, args.get("z").getAsInt()) : null;
+		var at = Dimensions.visit(p, level, near);
+		return String.format(Locale.ROOT, "Sent %s to %s at %.0f %.0f %.0f.", p.getScoreboardName(), level.dimension().identifier(), at.x, at.y, at.z);
+	}
+
 	// ---------------------------------------------------------------- managing definitions
 
 	private static String kind(JsonObject def) {
+		if (Dimensions.isDimension(def)) return "dimension";
 		return CustomBlocks.isBlock(def) ? "block" : CustomEntities.isEntity(def) ? "creature" : "item";
 	}
 
@@ -1776,6 +1879,13 @@ public class GameTools {
 
 	private String deleteDefinition(JsonObject args) throws ToolError {
 		JsonObject def = itemDef(args);
+		if (Dimensions.isDimension(def)) {
+			ServerLevel level = server.getLevel(Dimensions.key(id(def)));
+			int moved = level == null ? 0 : Dimensions.unload(server, level).size();
+			CustomItems.remove(server, id(def));
+			return "Deleted dimension " + id(def) + (moved > 0 ? "; " + moved + " player(s) inside were sent to the overworld" : "")
+				+ ". Its terrain stays saved, and comes back if a dimension with this id is defined again (reset: true wipes it).";
+		}
 		CustomItems.remove(server, id(def));
 		return "Deleted custom " + kind(def) + " " + id(def) + ".";
 	}
@@ -1805,6 +1915,7 @@ public class GameTools {
 						def.addProperty("slot", slot);
 					}
 					CustomItems.define(server, def);
+					if (Dimensions.isDimension(def)) Dimensions.ensure(server, def);
 					return "Loaded " + kind(def) + " " + id + " (" + def.get("name").getAsString() + ") from the library.";
 				}
 				default -> throw new ToolError("action must be save, load or list");
@@ -1816,6 +1927,7 @@ public class GameTools {
 
 	private CompletableFuture<Images> viewItem(JsonObject args) throws ToolError {
 		JsonObject def = itemDef(args);
+		if (Dimensions.isDimension(def)) throw new ToolError(id(def) + " is a dimension; visit it, or view_build a box in it (dimension " + id(def) + ")");
 		List<String> views = new ArrayList<>();
 		if (args.has("views") && args.get("views").isJsonArray()) for (JsonElement e : args.getAsJsonArray("views")) views.add(e.getAsString());
 		if (views.isEmpty()) views.add("southeast");

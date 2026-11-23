@@ -318,4 +318,55 @@ public class ModdingServerTest {
 		h.assertTrue(CustomBlocks.isBlock(def("l_lamp")) && CustomBlocks.light(def("l_lamp")) == 12, "loaded back from the library");
 		h.succeed();
 	}
+
+	@GameTest(maxTicks = 400)
+	public void dimensionsAreCreatedVisitedAndRemoved(GameTestHelper h) {
+		var server = h.getLevel().getServer();
+		tool("define_dimension", "{\"id\":\"g_moon\",\"name\":\"Moon\",\"sky\":\"starry\",\"biome\":\"alien\",\"reset\":true,"
+			+ "\"terrain\":{\"style\":\"hills\",\"surface\":\"minecraft:snow_block\",\"under\":\"minecraft:andesite\",\"sea_level\":-100,\"decorate\":false}}");
+		ServerLevel moon = server.getLevel(Dimensions.key("g_moon"));
+		h.assertTrue(moon != null, "the dimension exists right away");
+		h.assertTrue(moon.getBiome(new BlockPos(0, 64, 0)).is(CustomItems.id("alien")), "it uses the chosen biome");
+
+		ServerPlayer player = h.makeMockServerPlayerInLevel();
+		// Every test's mock player is called test-mock-player, so send this one directly rather than by name.
+		Dimensions.visit(player, moon, null);
+		h.assertTrue(player.level() == moon, "visiting takes the player there");
+		h.assertTrue(toolError("visit_dimension", "{\"id\":\"nowhere\"}").contains("No dimension"), "unknown dimensions are rejected");
+		BlockPos under = player.blockPosition().below();
+		h.assertTrue(moon.getBlockState(under).is(Blocks.SNOW_BLOCK), "they land on the designed surface, got " + moon.getBlockState(under));
+
+		ClaudeCraft.runAt(h.getLevel(), List.of("execute in custom:g_moon run setblock 3 220 3 minecraft:gold_block"), Vec3.ZERO);
+		h.assertTrue(moon.getBlockState(new BlockPos(3, 220, 3)).is(Blocks.GOLD_BLOCK), "execute in custom:<id> reaches the dimension");
+
+		// Redesign as floating islands and regenerate: the player comes back to the new ground.
+		tool("define_dimension", "{\"id\":\"g_moon\",\"name\":\"Moon\",\"sky\":\"starry\",\"biome\":\"alien\",\"reset\":true,"
+			+ "\"terrain\":{\"style\":\"islands\",\"surface\":\"minecraft:end_stone\"}}");
+		ServerLevel islands = server.getLevel(Dimensions.key("g_moon"));
+		h.assertTrue(islands != moon && player.level() == islands, "reset rebuilds the dimension and brings the player back");
+		h.assertTrue(islands.getBlockState(new BlockPos(3, 220, 3)).isAir(), "the old terrain is gone");
+
+		tool("define_dimension", "{\"id\":\"g_cave\",\"name\":\"Underdark\",\"sky\":\"cavern\",\"biome\":\"crimson\",\"terrain\":{\"style\":\"caves\"}}");
+		ServerLevel cave = server.getLevel(Dimensions.key("g_cave"));
+		Vec3 inCave = Dimensions.safeSpot(cave, 0, 0);
+		BlockPos feet = BlockPos.containing(inCave);
+		h.assertTrue(cave.getBlockState(feet.below()).isSolid() && cave.getBlockState(feet).isAir() && feet.getY() < 250,
+			"a cavern landing is a pocket of air under the ceiling, got " + feet);
+
+		tool("define_dimension", "{\"id\":\"g_void\",\"name\":\"Void\",\"terrain\":{\"style\":\"void\"}}");
+		Vec3 inVoid = Dimensions.safeSpot(server.getLevel(Dimensions.key("g_void")), 0, 0);
+		h.assertTrue(server.getLevel(Dimensions.key("g_void")).getBlockState(BlockPos.containing(inVoid).below()).is(Blocks.SMOOTH_STONE),
+			"the void gets a platform to stand on");
+
+		String err = toolError("define_dimension", "{\"id\":\"g_bad\",\"name\":\"x\",\"terrain\":{\"height_expression\":\"64 + (\"}}");
+		h.assertTrue(!err.isEmpty() && CustomItems.DEFS.get("g_bad") == null, "a broken expression is rejected: " + err);
+		h.assertTrue(toolError("define_dimension", "{\"id\":\"g_bad\",\"name\":\"x\",\"biome\":\"nowhere\"}").contains("biome"), "unknown biomes are rejected");
+
+		tool("delete_definition", "{\"id\":\"g_moon\"}");
+		h.assertTrue(server.getLevel(Dimensions.key("g_moon")) == null && player.level() == server.overworld(),
+			"deleting unloads it and sends players home");
+		tool("delete_definition", "{\"id\":\"g_cave\"}");
+		tool("delete_definition", "{\"id\":\"g_void\"}");
+		h.succeed();
+	}
 }

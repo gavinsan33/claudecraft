@@ -28,6 +28,8 @@ Ask for something that doesn't exist and Claude designs it on the spot and adds 
 
 Not quite right? Ask for changes ("make it bigger", "give it spots") and the new look shows up everywhere, even on copies already in the world.
 
+- **Dimensions.** "Make a moon I can visit." Whole new worlds, created instantly: alien hills under a purple sky, floating islands among the stars, endless caverns. Claude shapes the land, can build it from blocks it invented, fills it with its creatures, and can build portals to get there.
+
 Claude can add crafting, smelting and stonecutting recipes, so survival players can make what it invents. Everything also shows up in a ClaudeCraft tab in the creative inventory. Commands can use your inventions too (`/give @s custom:ruby`, `/summon custom:hippo`), and Claude can save a design to a library and load it into another world.
 
 ### And more
