@@ -135,6 +135,19 @@ final class Shapes {
 		return out;
 	}
 
+	/** Keep only the blocks with at least one face not touching another block of the set: a closed 1-block shell. */
+	static List<int[]> hollow(List<int[]> voxels) {
+		Set<List<Integer>> all = new java.util.HashSet<>();
+		for (int[] v : voxels) all.add(List.of(v[0], v[1], v[2]));
+		List<int[]> out = new ArrayList<>();
+		for (int[] v : voxels) {
+			int x = v[0], y = v[1], z = v[2];
+			if (!all.contains(List.of(x + 1, y, z)) || !all.contains(List.of(x - 1, y, z)) || !all.contains(List.of(x, y + 1, z))
+				|| !all.contains(List.of(x, y - 1, z)) || !all.contains(List.of(x, y, z + 1)) || !all.contains(List.of(x, y, z - 1))) out.add(v);
+		}
+		return out;
+	}
+
 	/** Smooth curve passing through every point (Catmull-Rom spline), drawn like {@link #line}. */
 	static List<int[]> curve(List<int[]> points, double radius) {
 		if (points.size() < 3) return line(points, radius);
@@ -392,6 +405,12 @@ final class Shapes {
 			int[] p = diag.get(k - 1), q = diag.get(k);
 			check(Math.abs(p[0] - q[0]) <= 1 && Math.abs(p[1] - q[1]) <= 1 && Math.abs(p[2] - q[2]) <= 1, "polyline is connected");
 		}
+		List<int[]> capsule = line(List.of(new int[]{0, 0, 0}, new int[]{10, 0, 0}), 3);
+		List<int[]> capShell = hollow(capsule);
+		check(capShell.size() < capsule.size() && !capShell.isEmpty(), "hollow capsule is smaller");
+		check(capShell.stream().noneMatch(v -> v[0] == 5 && v[1] == 0 && v[2] == 0), "hollow capsule is empty inside");
+		check(capShell.stream().anyMatch(v -> v[0] == -3) && capShell.stream().anyMatch(v -> v[0] == 13), "hollow capsule keeps its round ends");
+
 		List<int[]> arch = curve(List.of(new int[]{0, 0, 0}, new int[]{5, 6, 0}, new int[]{10, 0, 0}), 0);
 		check(arch.stream().anyMatch(v -> v[0] == 5 && v[1] == 6), "curve passes through its points");
 		check(arch.stream().anyMatch(v -> v[0] == 10 && v[1] == 0), "curve reaches its end");
