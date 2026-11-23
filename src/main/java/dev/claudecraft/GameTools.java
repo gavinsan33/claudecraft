@@ -576,7 +576,8 @@ public class GameTools {
 				      "items":{"type":"array","items":{"type":"string"}},"chance":{"type":"number"}}},
 				    "rideable":{"type":"boolean","description":"Players (its owner, if tamable) ride it by right-clicking; it goes where they look. Flying mounts climb with jump."},
 				    "ranged":{"type":"object","description":"Attack from range instead of melee (neutral or hostile).","properties":{
-				      "projectile":{"type":"string","description":"arrow, fireball, small_fireball, wind_charge, or an item id like minecraft:snowball or custom:<id> that flies as that item."},
+				      "projectile":{"type":"string","description":"beam (instant ray), arrow, fireball, small_fireball, wind_charge, or an item id like minecraft:snowball or custom:<id> that flies as that item."},
+				      "effect":{"type":"string","description":"Effect drawn along a beam, or carried by a flying item."},"hit_effect":{"type":"string"},
 				      "damage":{"type":"number"},"speed":{"type":"number"},"interval_seconds":{"type":"number","description":"Default 2."},
 				      "range":{"type":"number","description":"Default 16 blocks."},"gravity":{"type":"boolean"},
 				      "hit_commands":{"type":"array","items":{"type":"string"}}}},
@@ -633,6 +634,68 @@ public class GameTools {
 				  "views":{"type":"array","items":{"type":"string","enum":["southeast","southwest","northwest","northeast","top"]}}
 				},"required":["id"]}""",
 			this::viewItem);
+
+		register("define_effect",
+			"Design a visual effect drawn by every player's game: glowing beams (straight lasers, crackling lightning, waves, "
+				+ "spirals), orbs with a halo and a spinning ring, expanding shockwave rings, and sparks that burst out, drift "
+				+ "along a beam or swirl inward. Glows add up like light, and an orb can be solid black, so a black hole is a black "
+				+ "orb with a purple halo, a bright tilted ring and sparks swirling in. An effect runs from a start point to an end "
+				+ "point (for beams; parts sit at either end with at), for duration_seconds. Add a field to make it pull or push "
+				+ "things and hurt them. Use effects in items' and creatures' shoot/ranged (effect, hit_effect), show one with "
+				+ "play_effect, and in commands: claude effect <id> <from> [to], or summon custom:<id> for one at a point.",
+			"""
+				{"type":"object","properties":{
+				  "id":{"type":"string"},"name":{"type":"string"},"description":{"type":"string"},
+				  "duration_seconds":{"type":"number","description":"Default 1. A zap is 0.2 to 0.4, a black hole 5 to 15."},
+				  "sound":{"type":"string","description":"Vanilla sound played at the start, e.g. entity.lightning_bolt.thunder, entity.warden.sonic_boom, block.beacon.activate."},
+				  "sound_volume":{"type":"number"},
+				  "parts":{"type":"array","items":{"type":"object","properties":{
+				    "type":{"type":"string","enum":%s},
+				    "at":{"type":"string","enum":%s,"description":"Orbs, rings and sparks: at the start (default), the end, or along the beam."},
+				    "start_seconds":{"type":"number"},"end_seconds":{"type":"number","description":"When this part shows, within the effect's time."},
+				    "fade":{"type":"number","description":"Fraction of its time spent fading out at the end, default 0.3; 0 for none."},
+				    "color":{"type":"string","description":"#RRGGBB or #AARRGGBB (alpha makes it fainter)."},
+				    "style":{"type":"string","enum":%s,"description":"beam: straight (laser), lightning (jagged, re-crackling, with branches), wave or spiral."},
+				    "width":{"type":"number","description":"beam: core thickness in blocks, default 0.12."},
+				    "glow":{"type":"number","description":"How far the glow spreads, as a multiple of width (beam, default 3.5) or radius (orb, default 2.2); 0 for none."},
+				    "core_color":{"type":"string","description":"beam: the hot center line, default white."},
+				    "jitter":{"type":"number","description":"lightning: how wildly it zigzags."},"branches":{"type":"integer","description":"lightning: forks, default 3."},
+				    "flicker":{"type":"boolean","description":"lightning: re-crackle every couple of ticks (default true)."},
+				    "amplitude":{"type":"number"},"frequency":{"type":"number","description":"wave/spiral: waves per block."},"speed":{"type":"number","description":"wave/spiral: how fast it flows; sparks: how fast they fly, blocks per second."},
+				    "grow_seconds":{"type":"number","description":"beam: time to shoot out to full length; orb: time to swell up."},
+				    "pulse":{"type":"number","description":"0 to 1: throb in size."},
+				    "radius":{"type":"number","description":"orb size (default 0.5), or how far out swirling sparks start."},
+				    "solid":{"type":"boolean","description":"orb: draw its solid body (default true); false for pure light."},
+				    "glow_color":{"type":"string"},
+				    "ring":{"type":"number","description":"orb: outer radius of a flat spinning ring, as a multiple of the orb's radius (e.g. 3 for an accretion disk)."},
+				    "ring_color":{"type":"string"},"tilt":{"type":"number","description":"Ring tilt in degrees."},"spin":{"type":"number","description":"Ring turns per second."},
+				    "from_radius":{"type":"number"},"to_radius":{"type":"number","description":"ring: a shockwave expanding between these radii."},
+				    "axis":{"type":"string","enum":["up","facing","camera"],"description":"ring: flat on the ground (up), facing along the beam, or toward the viewer."},
+				    "count":{"type":"integer","description":"sparks: how many (up to 400)."},"size":{"type":"number","description":"sparks: size in blocks, default 0.08."},
+				    "gravity":{"type":"number","description":"sparks: blocks per second squared they fall."},
+				    "inward":{"type":"boolean","description":"sparks: swirl in toward the center from radius, endlessly, instead of bursting out."}
+				  },"required":["type"]}},
+				  "field":{"type":"object","description":"Makes the effect act on the world while it lasts.","properties":{
+				    "radius":{"type":"number","description":"Default 6."},
+				    "pull":{"type":"number","description":"Pull strength toward the center (1 is a gentle tug, 4 a black hole); negative pushes away."},
+				    "damage":{"type":"number","description":"Damage per second to creatures in range."},
+				    "commands":{"type":"array","items":{"type":"string"},"description":"Run every second as the effect, at its center."},
+				    "spare_owner":{"type":"boolean","description":"Leave whoever fired it alone (default true)."}
+				  }}
+				},"required":["id","name","parts"]}""".formatted(json(Effects.PART_TYPES), json(Effects.PLACES), json(Effects.BEAM_STYLES)),
+			this::defineEffect);
+
+		register("play_effect",
+			"Play an effect so players can see it. By default it fires from the player's hand to what they're looking at (up "
+				+ "to 24 blocks), which suits beams; give from and to (the same point for orbs and bursts) to place it.",
+			"""
+				{"type":"object","properties":{
+				  "id":{"type":"string"},
+				  "from":%s,"to":%s,
+				  "player":{"type":"string","description":"Whose hand and view to use when from/to are left out."},
+				  "dimension":%s
+				},"required":["id"]}""".formatted(VEC_SCHEMA, VEC_SCHEMA, DIM_SCHEMA),
+			this::playEffect);
 
 		register("define_dimension",
 			"Create a whole new dimension, or redesign one by reusing its id. It exists right away, no restart. sky picks the "
@@ -1505,12 +1568,15 @@ public class GameTools {
 
 	private static final String SHOOT_SCHEMA = """
 		{"type":"object","description":"Right-click shoots: a bow, wand, blaster or throwable.","properties":{
-		  "projectile":{"type":"string","description":"arrow, fireball, small_fireball, wind_charge, self (throws the item itself, using one up, like a snowball or spear), or an item id like minecraft:snowball or custom:<id> that flies as that item."},
+		  "projectile":{"type":"string","description":"beam (an instant ray, like a laser or lightning gun; give it an effect to see it), arrow, fireball, small_fireball, wind_charge, self (throws the item itself, using one up, like a snowball or spear), or an item id like minecraft:snowball or custom:<id> that flies as that item."},
+		  "effect":{"type":"string","description":"An effect made with define_effect: for beam, drawn from the hand to what it hits; for item projectiles, carried as they fly (an orb around them, sparks, a beam part trailing behind)."},
+		  "hit_effect":{"type":"string","description":"An effect played where it hits: a burst, a shockwave, a black hole."},
+		  "range":{"type":"number","description":"beam: how far it reaches, default 48."},
 		  "damage":{"type":"number","description":"Damage on hit (an arrow from a full bow does about 9)."},
 		  "speed":{"type":"number","description":"Default 2.5 for arrows, 1.5 otherwise."},
 		  "gravity":{"type":"boolean","description":"false: item projectiles fly straight, like magic bolts."},
 		  "ammo":{"type":"string","description":"Item used up per shot, e.g. minecraft:arrow or custom:<id>. Creative players need none."},
-		  "hit_commands":{"type":"array","items":{"type":"string"},"description":"Item projectiles: run as the shooter where it lands; @target is what it hit."}
+		  "hit_commands":{"type":"array","items":{"type":"string"},"description":"Item projectiles and beams: run as the shooter where it lands; @target is what it hit."}
 		}}""";
 
 	private static final String RECIPES_SCHEMA = """
@@ -1621,6 +1687,7 @@ public class GameTools {
 			String bad = CustomProjectiles.validate(shoot);
 			if (bad != null) throw new ToolError(bad);
 			if (shoot.has("ammo")) checkItems(List.of(shoot.get("ammo").getAsString()), "shoot.ammo");
+			checkEffects(shoot);
 		}
 		if (props.has("repair_with")) checkItems(CustomItems.strings(props, "repair_with"), "repair_with");
 
@@ -1715,6 +1782,7 @@ public class GameTools {
 		if (ranged != null) {
 			String bad = CustomProjectiles.validate(ranged);
 			if (bad != null) throw new ToolError(bad);
+			checkEffects(ranged);
 		}
 		JsonObject spawning = obj(props, "spawning");
 		if (spawning != null) {
@@ -1783,6 +1851,7 @@ public class GameTools {
 	private String giveItem(JsonObject args) throws ToolError {
 		JsonObject def = itemDef(args);
 		if (Dimensions.isDimension(def)) throw new ToolError(id(def) + " is a dimension; use visit_dimension");
+		if (Effects.isEffect(def)) throw new ToolError(id(def) + " is an effect; use play_effect");
 		ServerPlayer p = player(args, "player");
 		if (p == null) throw new ToolError("No player to give it to");
 		ItemStack stack = CustomItems.stack(def, optInt(args, "count", 1));
@@ -1790,6 +1859,62 @@ public class GameTools {
 		String what = CustomEntities.isEntity(def) ? def.get("name").getAsString() + " Spawn Egg" : def.get("name").getAsString();
 		if (!p.getInventory().add(stack)) p.drop(stack, false, net.minecraft.util.Prediction.SERVER_ONLY); // full inventory: drop it at their feet
 		return "Gave " + n + " " + what + " to " + p.getScoreboardName() + ".";
+	}
+
+	// ---------------------------------------------------------------- effects
+
+	private static final String VEC_SCHEMA = """
+		{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"}},"required":["x","y","z"]}""";
+
+	private static net.minecraft.world.phys.Vec3 vec(JsonObject args, String key) {
+		JsonObject o = args.getAsJsonObject(key);
+		return new net.minecraft.world.phys.Vec3(o.get("x").getAsDouble(), o.get("y").getAsDouble(), o.get("z").getAsDouble());
+	}
+
+	/** Check that every effect a shot or attack names exists. */
+	private static void checkEffects(JsonObject spec) throws ToolError {
+		for (String k : List.of("effect", "hit_effect")) {
+			if (!spec.has(k)) continue;
+			String id = spec.get(k).getAsString().replaceFirst("^custom:", "");
+			spec.addProperty(k, id);
+			if (!Effects.isEffect(CustomItems.DEFS.get(id))) throw new ToolError(k + ": no effect " + id + " (make it with define_effect first)");
+		}
+	}
+
+	private String defineEffect(JsonObject args) throws ToolError {
+		String id = checkId(args);
+		JsonObject old = CustomItems.DEFS.get(id);
+		if (old != null && !Effects.isEffect(old)) throw new ToolError(id + " is already a custom " + kind(old) + "; pick another id");
+		JsonObject def = args.deepCopy();
+		def.addProperty("kind", "effect");
+		String bad = Effects.validate(def);
+		if (bad != null) throw new ToolError(bad);
+		CustomItems.define(server, def);
+		return (old != null ? "Updated" : "Defined") + " effect " + id + " (" + Effects.durationTicks(def) / 20.0 + " s). Show it with play_effect, "
+			+ "use it in shoot/ranged as effect or hit_effect, or in commands: claude effect " + id + " <from> [to], summon custom:" + id + ".";
+	}
+
+	private String playEffect(JsonObject args) throws ToolError {
+		String id = args.has("id") ? args.get("id").getAsString().replaceFirst("^custom:", "") : "";
+		JsonObject def = CustomItems.DEFS.get(id);
+		if (!Effects.isEffect(def)) throw new ToolError("No effect " + id + " (make one with define_effect)");
+		ServerLevel level = level(args);
+		ServerPlayer p = player(args, "player");
+		net.minecraft.world.phys.Vec3 from, to;
+		if (args.has("from")) {
+			from = vec(args, "from");
+			to = args.has("to") ? vec(args, "to") : from;
+		} else {
+			if (p == null) throw new ToolError("Give from (no player to fire it from)");
+			var look = p.getLookAngle();
+			from = CustomProjectiles.muzzle(p, look);
+			var eye = p.getEyePosition();
+			var hit = level.clip(new net.minecraft.world.level.ClipContext(eye, eye.add(look.scale(24)), net.minecraft.world.level.ClipContext.Block.COLLIDER,
+				net.minecraft.world.level.ClipContext.Fluid.NONE, p));
+			to = args.has("to") ? vec(args, "to") : hit.getLocation();
+		}
+		Effects.play(level, def, from, to, p);
+		return String.format(Locale.ROOT, "Playing %s from %.1f %.1f %.1f to %.1f %.1f %.1f.", id, from.x, from.y, from.z, to.x, to.y, to.z);
 	}
 
 	// ---------------------------------------------------------------- dimensions
@@ -1847,6 +1972,7 @@ public class GameTools {
 
 	private static String kind(JsonObject def) {
 		if (Dimensions.isDimension(def)) return "dimension";
+		if (Effects.isEffect(def)) return "effect";
 		return CustomBlocks.isBlock(def) ? "block" : CustomEntities.isEntity(def) ? "creature" : "item";
 	}
 
@@ -1928,6 +2054,7 @@ public class GameTools {
 	private CompletableFuture<Images> viewItem(JsonObject args) throws ToolError {
 		JsonObject def = itemDef(args);
 		if (Dimensions.isDimension(def)) throw new ToolError(id(def) + " is a dimension; visit it, or view_build a box in it (dimension " + id(def) + ")");
+		if (Effects.isEffect(def)) throw new ToolError(id(def) + " is an effect; pictures can't show effects, so play it with play_effect and ask the player how it looks");
 		List<String> views = new ArrayList<>();
 		if (args.has("views") && args.get("views").isJsonArray()) for (JsonElement e : args.getAsJsonArray("views")) views.add(e.getAsString());
 		if (views.isEmpty()) views.add("southeast");

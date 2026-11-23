@@ -389,4 +389,53 @@ public class ModdingServerTest {
 			"see-through cubes hide faces only between their own kind, like glass");
 		h.succeed();
 	}
+
+	@GameTest(maxTicks = 200)
+	public void effectsBeamsTrailsAndFields(GameTestHelper h) {
+		ServerLevel level = h.getLevel();
+		tool("define_effect", "{\"id\":\"x_zap\",\"name\":\"Zap\",\"duration_seconds\":0.5,\"sound\":\"entity.lightning_bolt.thunder\","
+			+ "\"parts\":[{\"type\":\"beam\",\"style\":\"lightning\",\"color\":\"#80C0FF\"},{\"type\":\"sparks\",\"at\":\"end\",\"count\":20}]}");
+		tool("define_effect", "{\"id\":\"x_hole\",\"name\":\"Black Hole\",\"duration_seconds\":3,"
+			+ "\"parts\":[{\"type\":\"orb\",\"color\":\"#000000\",\"glow_color\":\"#8040FF\",\"ring\":3},{\"type\":\"sparks\",\"inward\":true}],"
+			+ "\"field\":{\"radius\":8,\"pull\":4,\"damage\":2}}");
+		h.assertTrue(toolError("define_effect", "{\"id\":\"x_bad\",\"name\":\"x\",\"parts\":[{\"type\":\"laser\"}]}").contains("type"), "unknown part types are rejected");
+		h.assertTrue(toolError("define_item", "{\"id\":\"x_bad\",\"name\":\"x\"," + PIXELS + ",\"properties\":{\"shoot\":{\"projectile\":\"beam\",\"effect\":\"nope\"}}}")
+			.contains("no effect"), "weapons can only use effects that exist");
+
+		item("x_gun", "{\"shoot\":{\"projectile\":\"beam\",\"damage\":6,\"effect\":\"x_zap\",\"hit_commands\":[\"tag @target add zapped\"]}}");
+		item("x_launcher", "{\"shoot\":{\"projectile\":\"minecraft:ender_pearl\",\"effect\":\"x_zap\",\"hit_effect\":\"x_hole\"}}");
+		creature("x_target", "{\"health\":40}");
+		var target = CustomEntities.spawn(level, def("x_target"), h.absoluteVec(new Vec3(4, 1, 8)), 1).getFirst();
+		target.setNoAi(true);
+		ServerPlayer player = h.makeMockServerPlayerInLevel();
+		Vec3 eye = h.absoluteVec(new Vec3(4, 1, 1));
+		player.snapTo(eye.x, eye.y, eye.z, 0, 0);
+		player.lookAt(net.minecraft.commands.arguments.EntityAnchorArgument.Anchor.EYES, target.getBoundingBox().getCenter());
+		CustomProjectiles.shootFromItem(player, CustomItems.stack(def("x_gun"), 1), CustomItems.props(def("x_gun")).getAsJsonObject("shoot"));
+		h.assertTrue(target.getHealth() == 34, "the beam hits the creature in front, health " + target.getHealth());
+		h.assertTrue(target.entityTags().contains("zapped"), "and runs hit_commands on it");
+		var zaps = level.getEntitiesOfClass(Effects.EffectEntity.class, player.getBoundingBox().inflate(3), e -> e.effectId().equals("x_zap"));
+		h.assertTrue(zaps.size() == 1 && zaps.getFirst().to().length() > 4, "the zap is drawn from the hand to the target");
+
+		CustomProjectiles.shootFromItem(player, CustomItems.stack(def("x_launcher"), 1), CustomItems.props(def("x_launcher")).getAsJsonObject("shoot"));
+		var thrown = level.getEntitiesOfClass(CustomProjectiles.Thrown.class, player.getBoundingBox().inflate(3));
+		h.assertTrue(thrown.size() == 1 && thrown.getFirst().trail().equals("x_zap"), "thrown items carry their effect");
+		thrown.getFirst().discard();
+
+		// A black hole from a command pulls a creature in.
+		Vec3 hole = h.absoluteVec(new Vec3(4, 3, 4));
+		ClaudeCraft.runAt(level, List.of(String.format(java.util.Locale.ROOT, "summon custom:x_hole %.2f %.2f %.2f", hole.x, hole.y, hole.z)), hole);
+		var holes = level.getEntitiesOfClass(Effects.EffectEntity.class, new AABB(BlockPos.containing(hole)).inflate(1), e -> e.effectId().equals("x_hole"));
+		h.assertTrue(holes.size() == 1 && holes.getFirst().entityTags().contains("custom.x_hole"), "summon custom:<effect> places it");
+		target.setNoAi(false);
+		double before = target.position().distanceTo(hole);
+		h.runAfterDelay(20, () -> {
+			h.assertTrue(target.position().distanceTo(hole) < before - 0.5, "the field pulls things in: " + before + " -> " + target.position().distanceTo(hole));
+			h.assertTrue(target.getHealth() < 34, "and hurts them");
+		});
+		h.runAfterDelay(70, () -> {
+			h.assertTrue(level.getEntitiesOfClass(Effects.EffectEntity.class, new AABB(BlockPos.containing(hole)).inflate(20)).isEmpty(), "effects end on time");
+			h.succeed();
+		});
+	}
 }

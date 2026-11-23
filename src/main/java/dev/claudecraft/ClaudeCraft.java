@@ -93,6 +93,13 @@ public class ClaudeCraft implements ModInitializer {
 					.executes(ctx -> undo(ctx, 1))
 					.then(Commands.argument("steps", IntegerArgumentType.integer(1, 50))
 						.executes(ctx -> undo(ctx, IntegerArgumentType.getInteger(ctx, "steps")))))
+				.then(Commands.literal("effect").requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
+					// claude effect <id> <from> [to]: play an effect, e.g. from an item's or block's commands.
+					.then(Commands.argument("id", StringArgumentType.word())
+						.then(Commands.argument("from", net.minecraft.commands.arguments.coordinates.Vec3Argument.vec3())
+							.executes(ctx -> effect(ctx, false))
+							.then(Commands.argument("to", net.minecraft.commands.arguments.coordinates.Vec3Argument.vec3())
+								.executes(ctx -> effect(ctx, true))))))
 				.then(Commands.literal("visit").requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
 					// For portals: a custom block's step_commands or use_commands run "claude visit <dimension>".
 					.then(Commands.argument("dimension", StringArgumentType.word())
@@ -153,6 +160,19 @@ public class ClaudeCraft implements ModInitializer {
 		java.util.List<String> cmds = new java.util.ArrayList<>();
 		for (String c : commands) cmds.add(c.replaceFirst("^/", ""));
 		tools.execute(level.getServer().createCommandSourceStack().withLevel(level).withPosition(at).withSuppressedOutput(), cmds);
+	}
+
+	private static int effect(com.mojang.brigadier.context.CommandContext<net.minecraft.commands.CommandSourceStack> ctx, boolean hasTo) {
+		String id = StringArgumentType.getString(ctx, "id").replaceFirst("^custom:", "");
+		var def = CustomItems.DEFS.get(id);
+		if (!Effects.isEffect(def)) {
+			ctx.getSource().sendFailure(net.minecraft.network.chat.Component.literal("No effect " + id));
+			return 0;
+		}
+		var from = net.minecraft.commands.arguments.coordinates.Vec3Argument.getVec3(ctx, "from");
+		var to = hasTo ? net.minecraft.commands.arguments.coordinates.Vec3Argument.getVec3(ctx, "to") : from;
+		Effects.play(ctx.getSource().getLevel(), def, from, to, ctx.getSource().getEntity());
+		return 1;
 	}
 
 	private static int visit(com.mojang.brigadier.context.CommandContext<net.minecraft.commands.CommandSourceStack> ctx,

@@ -158,7 +158,7 @@ public final class VoxelModel {
 		return out;
 	}
 
-	static int color(String s) {
+	public static int color(String s) {
 		String h = s.trim();
 		if (h.startsWith("#")) h = h.substring(1);
 		try {

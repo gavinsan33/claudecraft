@@ -56,7 +56,7 @@ import java.util.function.Predicate;
  * that emits its definition's quads straight into the chunk mesh, so placed blocks cost what vanilla blocks do.
  */
 public class ClaudeCraftClient implements ClientModInitializer {
-	private static final Identifier WHITE = Identifier.fromNamespaceAndPath("claudecraft", "textures/item/white.png");
+	static final Identifier WHITE = Identifier.fromNamespaceAndPath("claudecraft", "textures/item/white.png");
 	/** Shown for a stack whose definition this client doesn't have (yet). */
 	private static final Mesh MISSING = Mesh.of(missingModel());
 
@@ -87,7 +87,8 @@ public class ClaudeCraftClient implements ClientModInitializer {
 		SpecialModelRenderers.ID_MAPPER.put(Identifier.fromNamespaceAndPath("claudecraft", "voxel"), VoxelRenderer.Unbaked.MAP_CODEC);
 		SelectItemModelProperties.ID_MAPPER.put(Identifier.fromNamespaceAndPath("claudecraft", "style"), StyleProperty.TYPE);
 		EntityRendererRegistry.register(CustomEntities.TYPE, CustomEntityRenderer::new);
-		EntityRendererRegistry.register(dev.claudecraft.CustomProjectiles.TYPE, net.minecraft.client.renderer.entity.ThrownItemRenderer::new);
+		EntityRendererRegistry.register(dev.claudecraft.CustomProjectiles.TYPE, ThrownRenderer::new);
+		EntityRendererRegistry.register(dev.claudecraft.Effects.TYPE, EffectRenderer::new);
 		CustomItems.onClientChange = blocks -> {
 			MESHES.clear();
 			BLOCK_MESHES.clear();
