@@ -390,6 +390,98 @@ public class ModdingServerTest {
 		h.succeed();
 	}
 
+	/** 16 rows of a flame picture: a tapering column that's taller in odd frames. */
+	static String flame(int frame) {
+		StringBuilder rows = new StringBuilder();
+		for (int r = 0; r < 16; r++) {
+			int half = Math.max(0, (r - (frame % 2 == 0 ? 6 : 3)) / 2);
+			StringBuilder row = new StringBuilder();
+			for (int c = 0; c < 16; c++) row.append(Math.abs(c - 7.5) < half ? (r > 11 ? 'y' : 'o') : '.');
+			rows.append(r > 0 ? "," : "").append('"').append(row).append('"');
+		}
+		return "{\"faces\":{\"cross\":[" + rows + "]}}";
+	}
+
+	/** A portal pattern: four letters cycling the same purples a step apart, in diagonal bands. */
+	static final String PORTAL_BLOCK;
+	static {
+		StringBuilder rows = new StringBuilder();
+		for (int r = 0; r < 16; r++) {
+			StringBuilder row = new StringBuilder();
+			for (int c = 0; c < 16; c++) row.append("abcd".charAt(((r + c) / 2) % 4));
+			rows.append(r > 0 ? "," : "").append('"').append(row).append('"');
+		}
+		PORTAL_BLOCK = "\"palette\":{\"a\":[\"#C0400090\",\"#C06010C0\",\"#C08030E0\",\"#C0A060FF\"],"
+			+ "\"b\":[\"#C06010C0\",\"#C08030E0\",\"#C0A060FF\",\"#C0400090\"],"
+			+ "\"c\":[\"#C08030E0\",\"#C0A060FF\",\"#C0400090\",\"#C06010C0\"],"
+			+ "\"d\":[\"#C0A060FF\",\"#C0400090\",\"#C06010C0\",\"#C08030E0\"]},\"faces\":{\"all\":[" + rows + "]}";
+	}
+
+	@GameTest(maxTicks = 200)
+	public void animatedFireBurnsAndPortalsTravel(GameTestHelper h) {
+		ServerLevel level = h.getLevel();
+		var server = level.getServer();
+		tool("define_block", "{\"id\":\"g_fire\",\"name\":\"Green Fire\",\"palette\":{\"o\":\"#40E060\",\"y\":\"#C0FFA0\"},"
+			+ "\"shape\":\"cross\",\"frames\":[" + flame(0) + "," + flame(1) + "],\"frame_time\":3,\"desync\":true,"
+			+ "\"properties\":{\"collision\":\"none\",\"burns\":true,\"light\":15,\"glow\":true,"
+			+ "\"particles\":[{\"type\":\"flame\",\"where\":\"top\"},{\"type\":\"dust\",\"color\":\"#40E060\",\"chance\":0.5}],"
+			+ "\"ambient_sound\":{\"sound\":\"block.fire.ambient\",\"chance\":0.04}}}");
+		JsonObject fire = def("g_fire");
+		h.assertTrue(CustomBlocks.animated(fire) && VoxelModel.frameCount(fire.getAsJsonObject("model")) == 2, "two flame frames make an animation");
+		h.assertTrue(CustomBlocks.glows(fire) && CustomBlocks.state(fire).emissiveRendering(), "glowing blocks render at full brightness");
+		h.assertTrue(!CustomBlocks.opaqueCube(fire), "fire doesn't hide its neighbors");
+		h.assertTrue(VoxelModel.parse(fire.getAsJsonObject("model"), 1).at(7, 10, 7) != 0 && VoxelModel.parse(fire.getAsJsonObject("model"), 0).at(7, 10, 7) == 0,
+			"each frame has its own flame shape");
+
+		tool("define_block", "{\"id\":\"g_swirl\",\"name\":\"Swirl\"," + PORTAL_BLOCK + "}");
+		h.assertTrue(VoxelModel.frameCount(def("g_swirl").getAsJsonObject("model")) == 4, "four-color cycles make four frames");
+		h.assertTrue(toolError("define_block", "{\"id\":\"g_bad\",\"name\":\"x\",\"palette\":{\"a\":\"#FFFFFF\"},\"layers\":[[\"a\"]],"
+			+ "\"properties\":{\"particles\":[\"nonsense\"]}}").contains("particle"), "unknown particles are rejected");
+		h.assertTrue(toolError("define_block", "{\"id\":\"g_bad\",\"name\":\"x\",\"palette\":{\"a\":\"#FFFFFF\"},\"layers\":[[\"a\"]],"
+			+ "\"properties\":{\"portal\":\"nowhere\"}}").contains("no dimension"), "portals to unknown dimensions are rejected");
+		String many = "[" + "\"#FFFFFF\",".repeat(126) + "\"#000000\"]";
+		h.assertTrue(toolError("define_block", "{\"id\":\"g_bad\",\"name\":\"x\",\"palette\":{\"a\":" + many + ",\"b\":[\"#FFFFFF\",\"#000000\"]},\"layers\":[[\"ab\"]]}")
+			.contains("frames"), "animations that would repeat too rarely are rejected");
+
+		// Fire sets a pig inside it alight.
+		BlockPos firePos = new BlockPos(1, 1, 1);
+		h.setBlock(firePos, CustomBlocks.state(fire));
+		var pig = h.spawn(net.minecraft.world.entity.EntityTypes.PIG, firePos);
+
+		// A 2x3 portal in an obsidian frame, leading to a flat test world.
+		tool("define_dimension", "{\"id\":\"g_portal_world\",\"name\":\"Portal World\",\"reset\":true,"
+			+ "\"terrain\":{\"style\":\"flat\",\"surface\":\"minecraft:moss_block\",\"decorate\":false}}");
+		tool("define_block", "{\"id\":\"g_portal\",\"name\":\"Portal\"," + PORTAL_BLOCK
+			+ ",\"properties\":{\"collision\":\"none\",\"portal\":\"g_portal_world\",\"light\":11,\"glow\":true}}");
+		BlockState portal = CustomBlocks.state(def("g_portal"));
+		int variant = portal.getValue(CustomBlocks.VARIANT);
+		for (int x = 0; x < 4; x++) for (int y = 1; y < 6; y++) {
+			boolean inside = x > 0 && x < 3 && y > 1 && y < 5;
+			h.setBlock(new BlockPos(x, y, 4), inside ? portal : Blocks.OBSIDIAN.defaultBlockState());
+		}
+		BlockPos entry = h.absolutePos(new BlockPos(1, 2, 4));
+		var traveller = h.spawn(net.minecraft.world.entity.EntityTypes.SHEEP, new BlockPos(1, 2, 4));
+		ServerLevel there = server.getLevel(Dimensions.key("g_portal_world"));
+
+		h.succeedWhen(() -> {
+			h.assertTrue(pig.isOnFire(), "the pig in the fire burns");
+			h.assertTrue(traveller.isRemoved(), "the sheep went through the portal");
+			var arrived = there.getEntitiesOfClass(net.minecraft.world.entity.animal.sheep.Sheep.class,
+				new AABB(entry).inflate(Portals.SEARCH + 8, 400, Portals.SEARCH + 8));
+			h.assertTrue(!arrived.isEmpty(), "and came out in the portal's dimension");
+			BlockPos copy = Portals.find(there, variant, entry);
+			h.assertTrue(copy != null, "a return portal was built on the far side");
+			BlockPos bottom = copy;
+			while (there.getBlockState(bottom.below()).is(CustomBlocks.BLOCK)) bottom = bottom.below();
+			h.assertTrue(there.getBlockState(bottom.below()).is(Blocks.OBSIDIAN), "with its frame, got " + there.getBlockState(bottom.below()));
+			// Coming back arrives beside the original portal, not a new one.
+			var back = Portals.destination(there, arrived.getFirst(), copy);
+			h.assertTrue(back != null && back.newLevel() == server.overworld(), "the return portal leads to the overworld");
+			h.assertTrue(back.position().distanceTo(Vec3.atCenterOf(entry)) < 6, "next to the portal we left from, got " + back.position());
+			h.assertTrue(Portals.find(level, variant, entry) != null, "the original is still there");
+		});
+	}
+
 	@GameTest(maxTicks = 200)
 	public void effectsBeamsTrailsAndFields(GameTestHelper h) {
 		ServerLevel level = h.getLevel();

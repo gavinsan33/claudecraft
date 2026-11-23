@@ -233,7 +233,7 @@ final class Dimensions {
 		return Vec3.atBottomCenterOf(new BlockPos(x, y, z));
 	}
 
-	private static boolean standable(ServerLevel level, BlockPos feet) {
+	static boolean standable(ServerLevel level, BlockPos feet) {
 		var below = level.getBlockState(feet.below());
 		return below.isSolid() && level.getFluidState(feet.below()).isEmpty()
 			&& level.getBlockState(feet).getCollisionShape(level, feet).isEmpty() && level.getFluidState(feet).isEmpty()

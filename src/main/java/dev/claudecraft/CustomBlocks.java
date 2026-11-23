@@ -39,6 +39,7 @@ import net.minecraft.world.level.LevelReader;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.EntityBlock;
+import net.minecraft.world.level.block.Portal;
 import net.minecraft.world.level.block.Mirror;
 import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.block.SoundType;
@@ -63,6 +64,16 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
+import net.minecraft.core.particles.DustParticleOptions;
+import net.minecraft.core.particles.ParticleOptions;
+import net.minecraft.core.particles.SimpleParticleType;
+import net.minecraft.resources.Identifier;
+import net.minecraft.sounds.SoundEvent;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.entity.InsideBlockEffectApplier;
+import net.minecraft.world.entity.InsideBlockEffectType;
+import net.minecraft.world.level.gamerules.GameRules;
+import net.minecraft.world.level.portal.TeleportTransition;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -76,7 +87,9 @@ import java.util.function.Consumer;
  * Blocks Claude designs while the game runs. Like custom items there is one registered block,
  * claudecraft:custom_block, but each definition gets a numbered variant (a block state property), so models,
  * shapes, light and drops all work through ordinary block states. Facing and redstone power are state properties
- * too; storage blocks get a block entity only where a definition asks for one.
+ * too; storage blocks get a block entity only where a definition asks for one. Designs can be animated (see
+ * VoxelModel; the client draws the moving parts), glow, give off particles and sounds, burn like fire, and be
+ * portals to another dimension (see Portals).
  */
 public final class CustomBlocks {
 	private CustomBlocks() {}
@@ -102,7 +115,8 @@ public final class CustomBlocks {
 	static void register() {
 		ResourceKey<Block> bk = ResourceKey.create(Registries.BLOCK, CustomItems.id("custom_block"));
 		BLOCK = Registry.register(BuiltInRegistries.BLOCK, bk, new CustomBlock(BlockBehaviour.Properties.of().setId(bk)
-			.strength(1.5f, 6f).dynamicShape().lightLevel(s -> s.getValue(LIGHT))));
+			.strength(1.5f, 6f).dynamicShape().lightLevel(s -> s.getValue(LIGHT))
+			.emissiveRendering(s -> glows(definition(s)))));
 		ResourceKey<Item> ik = ResourceKey.create(Registries.ITEM, CustomItems.id("custom_block"));
 		ITEM = Registry.register(BuiltInRegistries.ITEM, ik, new CustomBlockItem(BLOCK, new Item.Properties().setId(ik).useBlockDescriptionPrefix()));
 		STORAGE = Registry.register(BuiltInRegistries.BLOCK_ENTITY_TYPE, CustomItems.id("storage"), new BlockEntityType<>(Storage::new, Set.of(BLOCK)));
@@ -137,16 +151,21 @@ public final class CustomBlocks {
 	static boolean opaqueCube(JsonObject def) {
 		if (def == null) return false;
 		return OPAQUE.computeIfAbsent(def.get("id").getAsString(), k -> {
-			VoxelModel m;
-			try {
-				m = VoxelModel.parse(def.getAsJsonObject("model"));
-			} catch (RuntimeException e) {
-				return false;
-			}
-			if (m.sx != 16 || m.sy != 16 || m.sz != 16) return false;
-			for (int a = 0; a < 16; a++) for (int b = 0; b < 16; b++) {
-				int[][] outside = {{0, a, b}, {15, a, b}, {a, 0, b}, {a, 15, b}, {a, b, 0}, {a, b, 15}};
-				for (int[] v : outside) if ((m.at(v[0], v[1], v[2]) >>> 24) != 0xFF) return false;
+			JsonObject model = def.getAsJsonObject("model");
+			if (model.has("shape") && model.get("shape").getAsString().equals("cross")) return false;
+			int frames = Math.min(VoxelModel.frameCount(model), VoxelModel.MAX_FRAMES);
+			for (int f = 0; f < frames; f++) { // every frame of an animation has to be solid
+				VoxelModel m;
+				try {
+					m = VoxelModel.parse(model, f);
+				} catch (RuntimeException e) {
+					return false;
+				}
+				if (m.sx != 16 || m.sy != 16 || m.sz != 16) return false;
+				for (int a = 0; a < 16; a++) for (int b = 0; b < 16; b++) {
+					int[][] outside = {{0, a, b}, {15, a, b}, {a, 0, b}, {a, 15, b}, {a, b, 0}, {a, b, 15}};
+					for (int[] v : outside) if ((m.at(v[0], v[1], v[2]) >>> 24) != 0xFF) return false;
+				}
 			}
 			return true;
 		});
@@ -161,6 +180,91 @@ public final class CustomBlocks {
 		} catch (RuntimeException e) {
 			return false;
 		}
+	}
+
+	/** Drawn at full brightness whatever the light, like lava and magma. */
+	public static boolean glows(JsonObject def) {
+		JsonObject p = props(def);
+		return p.has("glow") && p.get("glow").getAsBoolean();
+	}
+
+	/** Does the design animate (more than one frame)? */
+	public static boolean animated(JsonObject def) {
+		return def != null && def.has("model") && VoxelModel.frameCount(def.getAsJsonObject("model")) > 1;
+	}
+
+	/** Blocks of designs with desync start their animations at different points, so a field of them doesn't flicker in step. */
+	public static int frameOffset(JsonObject def, BlockPos pos) {
+		JsonObject m = def.getAsJsonObject("model");
+		if (!m.has("desync") || !m.get("desync").getAsBoolean()) return 0;
+		return (int) (net.minecraft.util.Mth.getSeed(pos) >>> 16 & 0xFFFF);
+	}
+
+	// ------------------------------------------------------------ particles and sounds
+
+	static final List<String> PARTICLE_PLACES = List.of("inside", "top", "surface");
+
+	/** A particle a block gives off: any simple vanilla particle by name, or dust with a color and size. */
+	static ParticleOptions particle(JsonObject spec) {
+		String type = spec.has("type") ? spec.get("type").getAsString() : "";
+		Identifier id = Identifier.tryParse(type.contains(":") ? type : "minecraft:" + type);
+		if (id == null || type.isBlank()) throw new IllegalArgumentException("particles need a type, like flame, smoke, portal or dust");
+		if (id.equals(Identifier.withDefaultNamespace("dust"))) {
+			int rgb = spec.has("color") ? VoxelModel.color(spec.get("color").getAsString()) & 0xFFFFFF : 0xFFFFFF;
+			float size = spec.has("size") ? Math.max(0.1f, Math.min(4f, spec.get("size").getAsFloat())) : 1f;
+			return new DustParticleOptions(rgb, size);
+		}
+		var t = BuiltInRegistries.PARTICLE_TYPE.getOptional(id);
+		if (t.isEmpty()) throw new IllegalArgumentException("Unknown particle " + type);
+		if (!(t.get() instanceof SimpleParticleType simple)) {
+			throw new IllegalArgumentException("Particle " + type + " needs settings blocks can't give; use dust with a color, or a simple one like flame, smoke, portal, end_rod, soul_fire_flame");
+		}
+		return simple;
+	}
+
+	/** The particle specs in a block's properties, each as an object (a bare name is {"type": name}). */
+	static List<JsonObject> particleSpecs(JsonObject props) {
+		List<JsonObject> out = new ArrayList<>();
+		if (!props.has("particles") || !props.get("particles").isJsonArray()) return out;
+		for (JsonElement e : props.getAsJsonArray("particles")) {
+			if (e.isJsonObject()) out.add(e.getAsJsonObject());
+			else {
+				JsonObject o = new JsonObject();
+				o.addProperty("type", e.getAsString());
+				out.add(o);
+			}
+		}
+		return out;
+	}
+
+	/** {"sound", "chance", "volume"} from ambient_sound, which may also be just the sound's name. */
+	static JsonObject ambientSound(JsonObject props) {
+		if (!props.has("ambient_sound")) return null;
+		JsonElement e = props.get("ambient_sound");
+		if (e.isJsonObject()) return e.getAsJsonObject();
+		JsonObject o = new JsonObject();
+		o.addProperty("sound", e.getAsString());
+		return o;
+	}
+
+	private static float num(JsonObject o, String key, float def) {
+		return o.has(key) ? o.get(key).getAsFloat() : def;
+	}
+
+	// ------------------------------------------------------------ fire and portals
+
+	/** Damage a burning block does each time it hurts (fire is 1), or 0 if it doesn't burn. */
+	static float burnDamage(JsonObject def) {
+		JsonObject p = props(def);
+		if (!p.has("burns")) return 0;
+		JsonElement b = p.get("burns");
+		if (b.isJsonPrimitive() && b.getAsJsonPrimitive().isBoolean()) return b.getAsBoolean() ? 1 : 0;
+		return Math.max(0, b.getAsFloat());
+	}
+
+	static String portalTarget(JsonObject def) {
+		JsonObject p = props(def);
+		return p.has("portal") ? p.get("portal").getAsString() : null;
 	}
 
 	public static String idForSlot(int slot) {
@@ -234,6 +338,13 @@ public final class CustomBlocks {
 				m = VoxelModel.parse(def.getAsJsonObject("model"));
 			} catch (RuntimeException e) {
 				return Shapes.block();
+			}
+			JsonObject model = def.getAsJsonObject("model");
+			if (model.has("shape") && model.get("shape").getAsString().equals("cross")) {
+				// Like vanilla plants: a box around the crossed planes, as tall as the picture.
+				int top = 0;
+				for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) if (m.at(x, y, x) != 0 || m.at(x, y, 15 - x) != 0) top = y + 1;
+				return top == 0 ? Shapes.block() : Shapes.box(0.125, 0, 0.125, 0.875, top / 16.0, 0.875);
 			}
 			// Same placement as the mesh: centered in x and z, sitting on the floor.
 			double ox = (16 - m.sx) / 2.0, oz = (16 - m.sz) / 2.0;
@@ -310,9 +421,11 @@ public final class CustomBlocks {
 		return p.has("tool") && (!p.has("requires_tool") || p.get("requires_tool").getAsBoolean());
 	}
 
-	static final class CustomBlock extends Block implements EntityBlock {
+	static final class CustomBlock extends Block implements EntityBlock, Portal {
 		/** When each entity last set off a block's step commands, so standing still doesn't run them every tick. */
 		private static final Map<Entity, Long> LAST_STEP = new WeakHashMap<>();
+		/** The same for inside_commands. */
+		private static final Map<Entity, Long> LAST_INSIDE = new WeakHashMap<>();
 
 		CustomBlock(Properties props) {
 			super(props);
@@ -379,6 +492,11 @@ public final class CustomBlocks {
 			JsonObject def = definition(state);
 			if (props(def).has("collision") && props(def).get("collision").getAsString().equals("none")) return Shapes.empty();
 			return getShape(state, level, pos, ctx);
+		}
+
+		@Override
+		protected VoxelShape getEntityInsideCollisionShape(BlockState state, BlockGetter level, BlockPos pos, Entity entity) {
+			return shape(definition(state), state.getValue(FACING)); // the flames, not the whole block
 		}
 
 		@Override
@@ -545,6 +663,109 @@ public final class CustomBlocks {
 			if (last != null && now - last < 20) return;
 			LAST_STEP.put(entity, now);
 			ClaudeCraft.runAs(entity, cmds, center(pos).add(0, 1, 0), entity);
+		}
+
+		// -------------------------------------------------------- inside: fire, portals, commands
+
+		@Override
+		protected void entityInside(BlockState state, Level level, BlockPos pos, Entity entity, InsideBlockEffectApplier effects, boolean isPrecise) {
+			JsonObject def = definition(state);
+			if (def == null) return;
+			float burn = burnDamage(def);
+			if (burn > 0) { // like fire: thaws, sets alight, and hurts
+				effects.apply(InsideBlockEffectType.CLEAR_FREEZE);
+				effects.apply(InsideBlockEffectType.FIRE_IGNITE);
+				effects.runAfter(InsideBlockEffectType.FIRE_IGNITE, e -> e.hurt(e.level().damageSources().inFire(), burn));
+			}
+			if (portalTarget(def) != null && entity.canUsePortal(false)) entity.setAsInsidePortal(this, pos);
+			if (!(level instanceof ServerLevel)) return;
+			List<String> cmds = CustomItems.strings(props(def), "inside_commands");
+			if (cmds.isEmpty()) return;
+			long now = level.getGameTime();
+			Long last = LAST_INSIDE.get(entity);
+			if (last != null && now - last < 20) return;
+			LAST_INSIDE.put(entity, now);
+			ClaudeCraft.runAs(entity, cmds, center(pos), entity);
+		}
+
+		@Override
+		public int getPortalTransitionTime(ServerLevel level, Entity entity) {
+			// Like a nether portal: players stand in it for a few seconds (instant in creative), everything else goes at once.
+			return entity instanceof Player player
+				? Math.max(0, level.getGameRules().get(player.getAbilities().invulnerable
+					? GameRules.PLAYERS_NETHER_PORTAL_CREATIVE_DELAY : GameRules.PLAYERS_NETHER_PORTAL_DEFAULT_DELAY))
+				: 0;
+		}
+
+		@Override
+		public TeleportTransition getPortalDestination(ServerLevel level, Entity entity, BlockPos entry) {
+			return Portals.destination(level, entity, entry);
+		}
+
+		@Override
+		public Portal.Transition getLocalTransition() {
+			return Portal.Transition.CONFUSION; // the swirling screen while you wait
+		}
+
+		// -------------------------------------------------------- particles and sounds (client)
+
+		@Override
+		public void animateTick(BlockState state, Level level, BlockPos pos, RandomSource random) {
+			JsonObject def = definition(state);
+			if (def == null) return;
+			JsonObject p = props(def);
+			AABB box = shape(def, state.getValue(FACING)).bounds();
+			for (JsonObject spec : particleSpecs(p)) {
+				try {
+					emit(level, pos, box, spec, random);
+				} catch (RuntimeException ignored) {
+					// validated when defined; a bad one in an old save just doesn't show
+				}
+			}
+			JsonObject amb = ambientSound(p);
+			if (amb != null && amb.has("sound") && random.nextFloat() < num(amb, "chance", 0.05f)) {
+				SoundEvent sound = Effects.sound(amb.get("sound").getAsString());
+				if (sound != null) {
+					level.playLocalSound(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5, sound, SoundSource.BLOCKS,
+						num(amb, "volume", 1f), 0.8f + random.nextFloat() * 0.4f, false);
+				}
+			}
+		}
+
+		private static void emit(Level level, BlockPos pos, AABB box, JsonObject spec, RandomSource random) {
+			if (random.nextFloat() >= num(spec, "chance", 1f)) return;
+			ParticleOptions particle = particle(spec);
+			int count = Math.max(1, Math.min(16, (int) num(spec, "count", 1)));
+			double speed = num(spec, "speed", 0.02f);
+			String where = spec.has("where") ? spec.get("where").getAsString() : "inside";
+			for (int i = 0; i < count; i++) {
+				double x = box.minX + random.nextDouble() * box.getXsize();
+				double y = box.minY + random.nextDouble() * box.getYsize();
+				double z = box.minZ + random.nextDouble() * box.getZsize();
+				double vx = (random.nextDouble() - 0.5) * 2 * speed, vy = (random.nextDouble() - 0.5) * 2 * speed, vz = (random.nextDouble() - 0.5) * 2 * speed;
+				switch (where) {
+					case "top" -> { // rising off the top, like smoke from a campfire
+						y = box.maxY + 0.02;
+						vx *= 0.25;
+						vz *= 0.25;
+						vy = speed;
+					}
+					case "surface" -> { // just outside a random side, drifting away from it
+						Direction side = Direction.getRandom(random);
+						if (side == Direction.DOWN) side = Direction.UP;
+						double out = 0.05;
+						switch (side) {
+							case UP -> { y = box.maxY + out; vy = speed; }
+							case NORTH -> { z = box.minZ - out; vz = -speed; }
+							case SOUTH -> { z = box.maxZ + out; vz = speed; }
+							case WEST -> { x = box.minX - out; vx = -speed; }
+							default -> { x = box.maxX + out; vx = speed; }
+						}
+					}
+					default -> {}
+				}
+				level.addParticle(particle, pos.getX() + x, pos.getY() + y, pos.getZ() + z, vx, vy, vz);
+			}
 		}
 	}
 

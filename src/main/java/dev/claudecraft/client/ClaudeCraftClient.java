@@ -89,9 +89,11 @@ public class ClaudeCraftClient implements ClientModInitializer {
 		EntityRendererRegistry.register(CustomEntities.TYPE, CustomEntityRenderer::new);
 		EntityRendererRegistry.register(dev.claudecraft.CustomProjectiles.TYPE, ThrownRenderer::new);
 		EntityRendererRegistry.register(dev.claudecraft.Effects.TYPE, EffectRenderer::new);
+		AnimatedBlocks.register();
 		CustomItems.onClientChange = blocks -> {
 			MESHES.clear();
 			BLOCK_MESHES.clear();
+			AnimatedBlocks.clear();
 			CustomEntityRenderer.PARTS.clear();
 			Minecraft mc = Minecraft.getInstance();
 			if (mc.level != null) {
@@ -140,10 +142,18 @@ public class ClaudeCraftClient implements ClientModInitializer {
 		if (id == null) return MISSING;
 		JsonObject def = CustomItems.DEFS.get(id);
 		if (def == null) return MISSING;
-		return MESHES.computeIfAbsent(id, k -> {
+		// Animated designs move in the hand and inventory too: one cached mesh per frame.
+		int frame = 0;
+		if (def.has("model") && def.get("model").isJsonObject()) {
+			Minecraft mc = Minecraft.getInstance();
+			long time = mc.level != null ? mc.level.getGameTime() : System.currentTimeMillis() / 50;
+			frame = VoxelModel.frameAt(def.getAsJsonObject("model"), time, 0);
+		}
+		int f = frame;
+		return MESHES.computeIfAbsent(f == 0 ? id : id + "#" + f, k -> {
 			try {
-				if (def.has("kind") && def.get("kind").getAsString().equals("entity")) return Mesh.of(spawnEgg(k));
-				return Mesh.of(VoxelModel.parse(def.getAsJsonObject("model")));
+				if (def.has("kind") && def.get("kind").getAsString().equals("entity")) return Mesh.of(spawnEgg(id));
+				return Mesh.of(VoxelModel.parse(def.getAsJsonObject("model"), f));
 			} catch (RuntimeException e) {
 				return MISSING; // the server validates models, so this only happens with a corrupt save
 			}
@@ -261,9 +271,25 @@ public class ClaudeCraftClient implements ClientModInitializer {
 		});
 	}
 
-	/** Model for one custom_block state: looks up its variant's definition each time a chunk is built. */
+	/** VoxelModel's face order as directions. */
+	static final Direction[] DIRS = {Direction.EAST, Direction.WEST, Direction.UP, Direction.DOWN, Direction.SOUTH, Direction.NORTH};
+
+	/** Turn a side the way a block model is turned (its south side faces `facing`). */
+	static Direction turn(Direction d, Direction facing) {
+		if (d.getAxis().isVertical()) return d;
+		return switch (facing) {
+			case EAST -> d.getCounterClockWise();
+			case WEST -> d.getClockWise();
+			case NORTH -> d.getOpposite();
+			default -> d;
+		};
+	}
+
+	/**
+	 * Model for one custom_block state: looks up its variant's definition each time a chunk is built. Animated
+	 * designs put only their unchanging faces here; AnimatedBlocks draws the rest.
+	 */
 	static final class VoxelBlockModel implements BlockStateModel {
-		private static final Direction[] DIRS = {Direction.EAST, Direction.WEST, Direction.UP, Direction.DOWN, Direction.SOUTH, Direction.NORTH};
 		private static final float[] U = {0, 1, 1, 0}, V = {1, 1, 0, 0};
 		private final int variant;
 		private final Direction facing;
@@ -275,20 +301,16 @@ public class ClaudeCraftClient implements ClientModInitializer {
 			this.white = white;
 		}
 
-		/** Turn a side the way the model is turned (its south side faces `facing`). */
 		private Direction turn(Direction d) {
-			if (d.getAxis().isVertical()) return d;
-			return switch (facing) {
-				case EAST -> d.getCounterClockWise();
-				case WEST -> d.getClockWise();
-				case NORTH -> d.getOpposite();
-				default -> d;
-			};
+			return ClaudeCraftClient.turn(d, facing);
 		}
 
 		@Override
 		public void emitQuads(QuadEmitter e, BlockAndTintGetter level, BlockPos pos, BlockState state, RandomSource random, Predicate<Direction> cullTest) {
-			for (VoxelModel.Quad q : blockMesh(CustomBlocks.idForSlot(variant))) {
+			String id = CustomBlocks.idForSlot(variant);
+			AnimatedBlocks.Anim anim = AnimatedBlocks.anim(id);
+			if (anim != null) AnimatedBlocks.seen(pos);
+			for (VoxelModel.Quad q : anim != null ? anim.fixed() : blockMesh(id)) {
 				if (q.boundary() >= 0 && cullTest.test(turn(DIRS[q.boundary()]))) continue; // hidden by the neighboring block
 				float[] c = q.corners();
 				for (int k = 0; k < 4; k++) {
@@ -297,6 +319,10 @@ public class ClaudeCraftClient implements ClientModInitializer {
 				}
 				e.materialBake(white, MutableQuadView.BAKE_NORMALIZED);
 				e.nominalFace(turn(DIRS[q.face()]));
+				if (q.diagonal()) { // plants and fire: no side shading or corner shadows
+					e.shadeDirectionOverride(Direction.UP);
+					e.ambientOcclusion(net.fabricmc.fabric.api.util.TriState.FALSE);
+				}
 				e.chunkLayer(q.translucent() ? ChunkSectionLayer.TRANSLUCENT : ChunkSectionLayer.SOLID);
 				e.emit();
 			}
@@ -321,6 +347,7 @@ public class ClaudeCraftClient implements ClientModInitializer {
 			@Override
 			public BlockStateModel bake(BlockState state, ModelBaker baker) {
 				Material.Baked white = baker.materials().get(new Material(Identifier.fromNamespaceAndPath("claudecraft", "block/white")), () -> "claudecraft:custom_block");
+				AnimatedBlocks.white = white.sprite();
 				return new VoxelBlockModel(state.getValue(CustomBlocks.VARIANT), state.getValue(CustomBlocks.FACING), white);
 			}
 
