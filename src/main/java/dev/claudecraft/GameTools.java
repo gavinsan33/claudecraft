@@ -711,8 +711,16 @@ public class GameTools implements McpServer.Tools {
 
 		register("define_effect",
 			"Design a visual effect drawn by every player's game: glowing beams (straight lasers, crackling lightning, waves, "
-				+ "spirals), orbs with a halo and a spinning ring, expanding shockwave rings, and sparks that burst out, drift "
-				+ "along a beam or swirl inward. Glows add up like light, and an orb can be solid black, so a black hole is a black "
+				+ "spirals), orbs with a halo and a spinning ring, expanding shockwave rings, sparks that burst out, drift "
+				+ "along a beam or swirl inward, and particles: real particles whose motion you design, for smoke, dust, fire, "
+				+ "debris, rain, leaves, magic and anything that should move like a fluid. A particles part emits a burst of count "
+				+ "and/or rate per second while it lasts. Each particle appears at spawn, starts at velocity, then is pulled by "
+				+ "gravity, slowed by drag and pushed every tick by flow, a velocity field that makes swirls, vortices, updrafts and "
+				+ "orbits. spawn, velocity and flow are x/y/z math expressions (generate's syntax) in blocks and blocks per second "
+				+ "over: x y z (the particle's offset from where the part plays; 0 in spawn), t (seconds into the effect), i "
+				+ "(particle number) and n (how many the part makes), age (seconds) and life (0 to 1 over its lifetime), and r1 r2 "
+				+ "r3 r4 (random 0 to 1, fixed per particle). Its colors and sizes run across each particle's life and tint the "
+				+ "sprite (most are white or gray). Glows add up like light, and an orb can be solid black, so a black hole is a black "
 				+ "orb with a purple halo, a bright tilted ring and sparks swirling in. An effect runs from a start point to an end "
 				+ "point (for beams; parts sit at either end with at), for duration_seconds. Add a field to make it pull or push "
 				+ "things and hurt them. Use effects in items' and creatures' shoot/ranged (effect, hit_effect), show one with "
@@ -725,7 +733,7 @@ public class GameTools implements McpServer.Tools {
 				  "sound_volume":{"type":"number"},
 				  "parts":{"type":"array","items":{"type":"object","properties":{
 				    "type":{"type":"string","enum":%s},
-				    "at":{"type":"string","enum":%s,"description":"Orbs, rings and sparks: at the start (default), the end, or along the beam."},
+				    "at":{"type":"string","enum":%s,"description":"Orbs, rings, sparks and particles: at the start (default), the end, or along the beam."},
 				    "start_seconds":{"type":"number"},"end_seconds":{"type":"number","description":"When this part shows, within the effect's time."},
 				    "fade":{"type":"number","description":"Fraction of its time spent fading out at the end, default 0.3; 0 for none."},
 				    "color":{"type":"string","description":"#RRGGBB or #AARRGGBB (alpha makes it fainter)."},
@@ -742,12 +750,22 @@ public class GameTools implements McpServer.Tools {
 				    "solid":{"type":"boolean","description":"orb: draw its solid body (default true); false for pure light."},
 				    "glow_color":{"type":"string"},
 				    "ring":{"type":"number","description":"orb: outer radius of a flat spinning ring, as a multiple of the orb's radius (e.g. 3 for an accretion disk)."},
-				    "ring_color":{"type":"string"},"tilt":{"type":"number","description":"Ring tilt in degrees."},"spin":{"type":"number","description":"Ring turns per second."},
+				    "ring_color":{"type":"string"},"tilt":{"type":"number","description":"Ring tilt in degrees."},"spin":{"type":"number","description":"Ring turns per second; particles: turns per second, each a random way."},
 				    "from_radius":{"type":"number"},"to_radius":{"type":"number","description":"ring: a shockwave expanding between these radii."},
 				    "axis":{"type":"string","enum":["up","facing","camera"],"description":"ring: flat on the ground (up), facing along the beam, or toward the viewer."},
-				    "count":{"type":"integer","description":"sparks: how many (up to 400)."},"size":{"type":"number","description":"sparks: size in blocks, default 0.08."},
-				    "gravity":{"type":"number","description":"sparks: blocks per second squared they fall."},
-				    "inward":{"type":"boolean","description":"sparks: swirl in toward the center from radius, endlessly, instead of bursting out."}
+				    "count":{"type":"integer","description":"sparks: how many (up to 400); particles: a burst when the part starts."},"size":{"type":"number","description":"sparks: size in blocks, default 0.08."},
+				    "gravity":{"type":"number","description":"sparks and particles: blocks per second squared they fall (negative rises)."},
+				    "inward":{"type":"boolean","description":"sparks: swirl in toward the center from radius, endlessly, instead of bursting out."},
+				    "texture":{"type":"string","description":"particles: a vanilla particle sprite: generic (small smoke puffs), big_smoke, gust, small_gust, explosion, sonic_boom, spark, glitter, spell, effect, flash, glow, flame, soul_fire_flame, copper_fire_flame, soul, sculk_soul, leaf, cherry, pale_oak, splash, bubble, bubble_pop, drip_fall, lava, heart, note, angry, critical_hit, enchanted_hit, firefly, sweep, shriek, sga_a..sga_z (enchanting glyphs). Names with numbered frames (big_smoke_0..11) play through them over each particle's life; name one frame (generic_7) to use just it. Or block:<block id> for chips of a block's texture (debris: block:minecraft:dirt). Default generic."},
+				    "frames":{"type":"string","enum":["life","random"],"description":"particles: play an animated sprite's frames over its life (default) or pick one at random (leaves)."},
+				    "colors":{"type":"array","items":{"type":"string"},"description":"particles: #RRGGBB or #AARRGGBB across its life, e.g. [#FFE080, #FF6020, #00402020] to fade out. Default color, or white."},
+				    "sizes":{"type":"array","items":{"type":"number"},"description":"particles: width in blocks across its life, e.g. [0.5, 2]. Default 0.2."},
+				    "lifetime":{"type":"array","items":{"type":"number"},"description":"particles: [min, max] seconds. Default 1."},
+				    "rate":{"type":"number","description":"particles: how many per second while the part lasts (up to %d), on top of a burst of count (up to %d)."},
+				    "spawn":%s,"velocity":%s,"flow":%s,
+				    "drag":{"type":"number","description":"particles: 0 to 1, the share of its own speed it loses each second."},
+				    "emissive":{"type":"boolean","description":"particles: full brightness, even at night (fire, magic, sparks)."},
+				    "collide":{"type":"boolean","description":"particles: stop at blocks (rain, debris)."}
 				  },"required":["type"]}},
 				  "field":{"type":"object","description":"Makes the effect act on the world while it lasts.","properties":{
 				    "radius":{"type":"number","description":"Default 6."},
@@ -756,7 +774,8 @@ public class GameTools implements McpServer.Tools {
 				    "commands":{"type":"array","items":{"type":"string"},"description":"Run every second as the effect, at its center."},
 				    "spare_owner":{"type":"boolean","description":"Leave whoever fired it alone (default true)."}
 				  }}
-				},"required":["id","name","parts"]}""".formatted(json(Effects.PART_TYPES), json(Effects.PLACES), json(Effects.BEAM_STYLES)),
+				},"required":["id","name","parts"]}""".formatted(json(Effects.PART_TYPES), json(Effects.PLACES), json(Effects.BEAM_STYLES),
+					CustomParticles.MAX_RATE, CustomParticles.MAX_BURST, VEC_EXPR, VEC_EXPR, VEC_EXPR),
 			this::defineEffect);
 
 		register("play_effect",
@@ -2011,8 +2030,12 @@ public class GameTools implements McpServer.Tools {
 		if (bad != null) throw new ToolError(bad);
 		CustomItems.define(server, def);
 		return (old != null ? "Updated" : "Defined") + " effect " + id + " (" + Effects.durationTicks(def) / 20.0 + " s). Show it with play_effect, "
-			+ "use it in shoot/ranged as effect or hit_effect, or in commands: claude effect " + id + " <from> [to], summon custom:" + id + ".";
+			+ "use it in shoot/ranged as effect or hit_effect, or in commands: claude effect " + id + " <from> [to], summon custom:" + id + "."
+			+ Effects.particleSummary(def);
 	}
+
+	private static final String VEC_EXPR = """
+		{"type":"object","properties":{"x":{"type":"string"},"y":{"type":"string"},"z":{"type":"string"}},"description":"particles: x, y, z expressions; missing ones are 0."}""";
 
 	private String playEffect(JsonObject args) throws ToolError {
 		String id = args.has("id") ? args.get("id").getAsString().replaceFirst("^custom:", "") : "";
