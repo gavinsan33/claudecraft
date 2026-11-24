@@ -323,7 +323,7 @@ public final class CustomItems {
 	static final List<String> TOOL_TYPES = List.of("pickaxe", "axe", "shovel", "hoe");
 	static final List<String> TIERS = List.of("wood", "stone", "copper", "iron", "gold", "diamond", "netherite");
 	static final List<String> ARMOR_SLOTS = List.of("head", "chest", "legs", "feet");
-	static final List<String> ARMOR_LOOKS = List.of("model", "leather", "chainmail", "copper", "iron", "gold", "diamond", "netherite", "turtle_scute");
+	static final List<String> ARMOR_LOOKS = List.of("worn", "model", "leather", "chainmail", "copper", "iron", "gold", "diamond", "netherite", "turtle_scute");
 
 	static ToolMaterial tier(String name) {
 		return switch (name) {
@@ -403,9 +403,13 @@ public final class CustomItems {
 		if (p.has("armor")) {
 			JsonObject a = p.getAsJsonObject("armor");
 			EquipmentSlot slot = armorSlot(a.has("slot") ? a.get("slot").getAsString() : "chest");
-			String look = a.has("look") ? a.get("look").getAsString() : slot == EquipmentSlot.HEAD ? "model" : "leather";
+			String look = a.has("look") ? a.get("look").getAsString() : a.has("worn") ? "worn" : slot == EquipmentSlot.HEAD ? "model" : "leather";
 			Equippable.Builder eq = Equippable.builder(slot).setEquipSound(SoundEvents.ARMOR_EQUIP_GENERIC);
-			if (!look.equals("model")) {
+			if (look.equals("worn")) {
+				// An equipment asset only a pig saddle layer uses (assets need one): vanilla draws nothing on a humanoid, not even the item on
+				// its head, and the client's WornLayer draws the model.
+				eq.setAsset(ResourceKey.create(EquipmentAssets.ROOT_ID, id("worn")));
+			} else if (!look.equals("model")) {
 				eq.setAsset(ResourceKey.create(EquipmentAssets.ROOT_ID, Identifier.withDefaultNamespace(look)));
 				if (look.equals("leather")) {
 					int color = a.has("color") ? VoxelModel.color(a.get("color").getAsString()) : averageColor(def);

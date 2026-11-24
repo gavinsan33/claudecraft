@@ -95,6 +95,11 @@ public class ClaudeCraftClient implements ClientModInitializer {
 				var parent = (net.minecraft.client.renderer.entity.RenderLayerParent<net.minecraft.client.renderer.entity.state.AvatarRenderState, net.minecraft.client.model.player.PlayerModel>) (Object) avatar;
 				helper.register(new MorphLayer(parent));
 			}
+			if (renderer.getModel() instanceof net.minecraft.client.model.HumanoidModel<?>) {
+				@SuppressWarnings({"unchecked", "rawtypes"})
+				var worn = new WornLayer((net.minecraft.client.renderer.entity.RenderLayerParent) renderer);
+				helper.register(worn);
+			}
 		});
 		net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents.END_CLIENT_TICK.register(CustomParticle::tick);
 		AnimatedBlocks.register();

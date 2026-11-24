@@ -82,6 +82,58 @@ public final class Morphs {
 		return m;
 	}
 
+	/**
+	 * A wearable item's worn model (armor.worn) as a morph of voxel parts, or null if it has none. Its palette
+	 * defaults to the item's own. With mannequin, a gray player is added first, for pictures of how it fits.
+	 */
+	public static JsonObject worn(JsonObject item, boolean mannequin) {
+		JsonObject a = item == null ? null : CustomItems.props(item).getAsJsonObject("armor");
+		if (a == null || !a.has("worn") || !a.get("worn").isJsonObject()) return null;
+		JsonObject w = a.getAsJsonObject("worn");
+		JsonObject d = new JsonObject();
+		d.addProperty("id", "worn/" + item.get("id").getAsString());
+		JsonObject palette = w.has("palette") ? w.getAsJsonObject("palette").deepCopy()
+			: item.has("model") && item.getAsJsonObject("model").has("palette") ? item.getAsJsonObject("model").getAsJsonObject("palette").deepCopy() : new JsonObject();
+		JsonArray parts = new JsonArray();
+		if (mannequin) {
+			palette.addProperty(MANNEQUIN, "#9A9A9A");
+			for (var r : REGIONS.values()) {
+				JsonArray layers = new JsonArray();
+				for (int y = 0; y < r.h(); y++) {
+					JsonArray rows = new JsonArray();
+					for (int z = 0; z < r.d(); z++) rows.add(MANNEQUIN.repeat(r.w()));
+					layers.add(rows);
+				}
+				JsonObject p = new JsonObject();
+				p.add("layers", layers);
+				JsonArray origin = new JsonArray();
+				origin.add(Math.round(r.cx() - r.w() / 2f));
+				origin.add(Math.round(r.cy() - r.h() / 2f));
+				origin.add(Math.round(r.cz() - r.d() / 2f));
+				p.add("origin", origin);
+				parts.add(p);
+			}
+		}
+		if (w.has("parts") && w.get("parts").isJsonArray()) parts.addAll(w.getAsJsonArray("parts"));
+		d.add("palette", palette);
+		d.add("parts", parts);
+		return d;
+	}
+
+	private static final String MANNEQUIN = "\u2591";
+
+	/** Check a wearable's worn model, returning a problem or null. Only voxel parts: mobs and armor stands have no skin. */
+	static String validateWorn(JsonObject item) {
+		JsonObject d = worn(item, false);
+		if (d == null) return null;
+		if (d.getAsJsonArray("parts").isEmpty()) return "armor.worn needs parts";
+		for (JsonElement e : d.getAsJsonArray("parts")) {
+			if (!e.isJsonObject() || !e.getAsJsonObject().has("layers")) return "armor.worn parts are voxel parts: give each layers and origin";
+		}
+		String bad = validate(d);
+		return bad == null ? null : "armor.worn: " + bad;
+	}
+
 	/** Check a morph definition, returning a problem or null. */
 	static String validate(JsonObject def) {
 		for (String h : hidden(def)) if (!REGIONS.containsKey(h)) return "hide: " + h + " isn't one of all, " + String.join(", ", REGIONS.keySet());

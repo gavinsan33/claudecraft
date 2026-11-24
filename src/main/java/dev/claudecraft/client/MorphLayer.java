@@ -20,6 +20,7 @@ import net.minecraft.client.renderer.entity.LivingEntityRenderer;
 import net.minecraft.client.renderer.entity.RenderLayerParent;
 import net.minecraft.client.renderer.entity.layers.RenderLayer;
 import net.minecraft.client.renderer.entity.state.AvatarRenderState;
+import net.minecraft.client.renderer.entity.state.HumanoidRenderState;
 import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.world.entity.Entity;
@@ -84,6 +85,15 @@ public final class MorphLayer extends RenderLayer<AvatarRenderState, PlayerModel
 		return new float[]{a.get(0).getAsFloat(), a.get(1).getAsFloat(), a.get(2).getAsFloat()};
 	}
 
+	/** A wearable item's worn parts, parsed and cached; null if it has none. */
+	static Parsed worn(JsonObject item) {
+		if (item == null) return null;
+		Parsed cached = PARSED.get("worn/" + item.get("id").getAsString());
+		if (cached != null) return cached;
+		JsonObject w = Morphs.worn(item, false);
+		return w == null ? null : safeParsed(w);
+	}
+
 	static Parsed parsed(JsonObject def) {
 		return PARSED.computeIfAbsent(def.get("id").getAsString(), k -> {
 			List<Part> out = new ArrayList<>();
@@ -123,7 +133,7 @@ public final class MorphLayer extends RenderLayer<AvatarRenderState, PlayerModel
 		});
 	}
 
-	private static ModelPart vanilla(PlayerModel m, String name) {
+	private static ModelPart vanilla(net.minecraft.client.model.HumanoidModel<?> m, String name) {
 		return switch (name) {
 			case "head" -> m.head;
 			case "body" -> m.body;
@@ -191,8 +201,8 @@ public final class MorphLayer extends RenderLayer<AvatarRenderState, PlayerModel
 	}
 
 	/** One morph part, in the pose of the player model (feet at 1.5 blocks, y down, facing -z). */
-	private static void draw(PoseStack pose, SubmitNodeCollector collector, int light, int overlay, Part p, net.minecraft.client.renderer.rendertype.RenderType skinType,
-			boolean slim, PlayerModel model, AvatarRenderState s, boolean showOverlay) {
+	static void draw(PoseStack pose, SubmitNodeCollector collector, int light, int overlay, Part p, net.minecraft.client.renderer.rendertype.RenderType skinType,
+			boolean slim, net.minecraft.client.model.HumanoidModel<?> model, net.minecraft.client.renderer.entity.state.LivingEntityRenderState s, boolean showOverlay) {
 		pose.pushPose();
 		if (p.attach() != null) {
 			// Follow the vanilla part: its current turn about its pivot (and any shift, like sneaking).
@@ -204,7 +214,7 @@ public final class MorphLayer extends RenderLayer<AvatarRenderState, PlayerModel
 		pose.translate(0, 1.5f, 0);
 		pose.scale(1, -1, -1);
 		pose.translate(p.pivot()[0] / 16, p.pivot()[1] / 16, p.pivot()[2] / 16);
-		CustomEntityRenderer.animate(pose, p.role(), p.phase(), p.pivot()[0], s, s.isFallFlying);
+		CustomEntityRenderer.animate(pose, p.role(), p.phase(), p.pivot()[0], s, s instanceof HumanoidRenderState h && h.isFallFlying);
 		pose.rotateDegrees(Axis.YP, p.rotation()[1]);
 		pose.rotateDegrees(Axis.XP, p.rotation()[0]);
 		pose.rotateDegrees(Axis.ZP, p.rotation()[2]);
