@@ -1,6 +1,7 @@
 package dev.claudecraft;
 
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.SectionPos;
@@ -14,8 +15,11 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.portal.TeleportTransition;
+import net.minecraft.world.level.storage.LevelResource;
 import net.minecraft.world.phys.Vec3;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -28,7 +32,9 @@ import java.util.Set;
  * the cooldown (CustomBlock implements Portal); this works out where you arrive.
  *
  * You arrive beside a portal of the same design near the same x and z on the other side. If there isn't one, a
- * copy of the portal you walked through, frame and all, is built there, so there's always a way back.
+ * copy of the portal you walked through, frame and all, is built there, so there's always a way back. Built
+ * portals break like nether portals: break a frame block or any pane and every pane goes. Portals players build
+ * themselves are left alone.
  */
 final class Portals {
 	private Portals() {}
@@ -39,6 +45,70 @@ final class Portals {
 	private static final int MAX_BLOCKS = 512, MAX_SPAN = 32;
 
 	record Arrival(Vec3 pos, float yaw) {}
+
+	// ------------------------------------------------------------ built portals breaking together
+
+	/** Panes of built portals, per dimension: position (BlockPos.asLong) to the axis the portal is thin along. */
+	private static Map<String, Map<Long, String>> built;
+	private static MinecraftServer builtFor;
+
+	private static Path builtFile(MinecraftServer server) {
+		return server.getWorldPath(LevelResource.ROOT).resolve("claudecraft").resolve("built_portals.json");
+	}
+
+	private static Map<Long, String> built(ServerLevel level) {
+		MinecraftServer server = level.getServer();
+		if (builtFor != server) {
+			builtFor = server;
+			built = new HashMap<>();
+			try {
+				Path f = builtFile(server);
+				if (Files.exists(f)) {
+					for (var dim : JsonParser.parseString(Files.readString(f)).getAsJsonObject().entrySet()) {
+						Map<Long, String> panes = new HashMap<>();
+						for (var e : dim.getValue().getAsJsonObject().entrySet()) panes.put(Long.parseLong(e.getKey()), e.getValue().getAsString());
+						built.put(dim.getKey(), panes);
+					}
+				}
+			} catch (Exception e) {
+				ClaudeCraft.LOGGER.error("Couldn't read built portals", e);
+			}
+		}
+		return built.computeIfAbsent(level.dimension().identifier().toString(), k -> new HashMap<>());
+	}
+
+	// ponytail: rewrites the whole file per change; fine while portals number in the dozens, SavedData if it grows.
+	private static void saveBuilt(MinecraftServer server) {
+		JsonObject all = new JsonObject();
+		built.forEach((dim, panes) -> {
+			JsonObject o = new JsonObject();
+			panes.forEach((pos, axis) -> o.addProperty(Long.toString(pos), axis));
+			all.add(dim, o);
+		});
+		try {
+			Files.createDirectories(builtFile(server).getParent());
+			Files.writeString(builtFile(server), all.toString());
+		} catch (Exception e) {
+			ClaudeCraft.LOGGER.error("Couldn't save built portals", e);
+		}
+	}
+
+	/**
+	 * Whether a built portal's pane should vanish now that its neighbor in `dir` became `neighbor`: a frame block or
+	 * pane beside it in the portal's plane is gone. Each pane that goes updates the next, so the whole portal goes.
+	 */
+	static boolean breaks(ServerLevel level, BlockPos pos, BlockState state, Direction dir, BlockState neighbor) {
+		String thin = built(level).get(pos.asLong());
+		if (thin == null || dir.getAxis().getName().equals(thin)) return false;
+		if (matches(neighbor, state.getValue(CustomBlocks.VARIANT))) return false;
+		return neighbor.isAir() || neighbor.canBeReplaced();
+	}
+
+	/** Stop treating pos as a built pane once its block is gone. */
+	static void forget(ServerLevel level, BlockPos pos, int variant) {
+		if (matches(level.getBlockState(pos), variant)) return;
+		if (built(level).remove(pos.asLong()) != null) saveBuilt(level.getServer());
+	}
 
 	/** Where an entity standing in the portal block at `entry` goes, or null if it goes nowhere. Server thread. */
 	static TeleportTransition destination(ServerLevel level, Entity entity, BlockPos entry) {
@@ -163,6 +233,9 @@ final class Portals {
 				if (!copy.containsKey(side.subtract(shift)) && !dest.getBlockState(side).isAir()) dest.setBlock(side, Blocks.AIR.defaultBlockState(), flags);
 			}
 		}
+		Map<Long, String> panes = built(dest);
+		for (BlockPos q : portal) panes.put(q.offset(shift).asLong(), thin.getName());
+		saveBuilt(dest.getServer());
 		return new Arrival(at, forward.toYRot());
 	}
 

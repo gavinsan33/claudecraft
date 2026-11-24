@@ -765,7 +765,8 @@ public class GameTools implements McpServer.Tools {
 				    "spawn":%s,"velocity":%s,"flow":%s,
 				    "drag":{"type":"number","description":"particles: 0 to 1, the share of its own speed it loses each second."},
 				    "emissive":{"type":"boolean","description":"particles: full brightness, even at night (fire, magic, sparks)."},
-				    "collide":{"type":"boolean","description":"particles: stop at blocks (rain, debris)."}
+				    "collide":{"type":"boolean","description":"particles: stop at blocks (rain, debris)."},
+				    "trail":{"type":"boolean","description":"particles: when the effect follows someone, leave particles where they appeared (footprints, a smoke trail) instead of carrying them along (an aura)."}
 				  },"required":["type"]}},
 				  "field":{"type":"object","description":"Makes the effect act on the world while it lasts.","properties":{
 				    "radius":{"type":"number","description":"Default 6."},
@@ -780,12 +781,16 @@ public class GameTools implements McpServer.Tools {
 
 		register("play_effect",
 			"Play an effect so players can see it. By default it fires from the player's hand to what they're looking at (up "
-				+ "to 24 blocks), which suits beams; give from and to (the same point for orbs and bursts) to place it.",
+				+ "to 24 blocks), which suits beams; give from and to (the same point for orbs and bursts) to place it. follow "
+				+ "makes it move with a player or creature (an aura, a storm cloud over someone's head, a burning mob) until it "
+				+ "ends or they die; in commands that's claude effect <id> on <targets> [height].",
 			"""
 				{"type":"object","properties":{
 				  "id":{"type":"string"},
 				  "from":%s,"to":%s,
 				  "player":{"type":"string","description":"Whose hand and view to use when from/to are left out."},
+				  "follow":{"type":"string","description":"A player name or entity selector (e.g. @e[type=custom:hippo,sort=nearest,limit=1]) to attach it to. It starts at their feet unless from is given, and keeps that offset."},
+				  "height":{"type":"number","description":"With follow and no from: blocks above their feet, e.g. 2.2 for over a player's head."},
 				  "dimension":%s
 				},"required":["id"]}""".formatted(VEC_SCHEMA, VEC_SCHEMA, DIM_SCHEMA),
 			this::playEffect);
@@ -2055,6 +2060,22 @@ public class GameTools implements McpServer.Tools {
 			var hit = level.clip(new net.minecraft.world.level.ClipContext(eye, eye.add(look.scale(24)), net.minecraft.world.level.ClipContext.Block.COLLIDER,
 				net.minecraft.world.level.ClipContext.Fluid.NONE, p));
 			to = args.has("to") ? vec(args, "to") : hit.getLocation();
+		}
+		if (args.has("follow")) {
+			List<? extends Entity> targets;
+			try {
+				var src = (p != null ? p.createCommandSourceStack() : server.createCommandSourceStack()).withPermission(LevelBasedPermissionSet.GAMEMASTER);
+				targets = net.minecraft.commands.arguments.EntityArgument.entities().parse(new StringReader(CommandRewriter.rewrite(args.get("follow").getAsString(), CustomItems.DEFS::get, CustomItems.commandItems(server)))).findEntities(src);
+			} catch (CommandSyntaxException e) {
+				throw new ToolError("follow: " + e.getMessage());
+			}
+			if (targets.isEmpty()) throw new ToolError("follow: nobody matches " + args.get("follow").getAsString());
+			for (Entity t : targets) {
+				var start = args.has("from") ? from : t.position().add(0, args.has("height") ? args.get("height").getAsDouble() : 0, 0);
+				var end = args.has("to") ? to : start;
+				Effects.play((ServerLevel) t.level(), def, start, end, p, t);
+			}
+			return "Playing " + id + " on " + targets.size() + " " + (targets.size() == 1 ? targets.getFirst().getName().getString() : "entities") + ", following them.";
 		}
 		Effects.play(level, def, from, to, p);
 		return String.format(Locale.ROOT, "Playing %s from %.1f %.1f %.1f to %.1f %.1f %.1f.", id, from.x, from.y, from.z, to.x, to.y, to.z);

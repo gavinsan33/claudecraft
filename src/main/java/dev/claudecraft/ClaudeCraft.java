@@ -113,7 +113,13 @@ public class ClaudeCraft implements ModInitializer {
 						.then(Commands.argument("from", net.minecraft.commands.arguments.coordinates.Vec3Argument.vec3())
 							.executes(ctx -> effect(ctx, false))
 							.then(Commands.argument("to", net.minecraft.commands.arguments.coordinates.Vec3Argument.vec3())
-								.executes(ctx -> effect(ctx, true))))))
+								.executes(ctx -> effect(ctx, true))))
+						// claude effect <id> on <targets> [height]: an effect that follows each target around.
+						.then(Commands.literal("on")
+							.then(Commands.argument("targets", net.minecraft.commands.arguments.EntityArgument.entities())
+								.executes(ctx -> effectOn(ctx, 0))
+								.then(Commands.argument("height", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(-64, 64))
+									.executes(ctx -> effectOn(ctx, com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(ctx, "height"))))))))
 				.then(Commands.literal("visit").requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
 					// For portals: a custom block's step_commands or use_commands run "claude visit <dimension>".
 					.then(Commands.argument("dimension", StringArgumentType.word())
@@ -191,6 +197,23 @@ public class ClaudeCraft implements ModInitializer {
 		var to = hasTo ? net.minecraft.commands.arguments.coordinates.Vec3Argument.getVec3(ctx, "to") : from;
 		Effects.play(ctx.getSource().getLevel(), def, from, to, ctx.getSource().getEntity());
 		return 1;
+	}
+
+	private static int effectOn(com.mojang.brigadier.context.CommandContext<net.minecraft.commands.CommandSourceStack> ctx, double height)
+			throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+		String id = StringArgumentType.getString(ctx, "id").replaceFirst("^custom:", "");
+		var def = CustomItems.DEFS.get(id);
+		if (!Effects.isEffect(def)) {
+			ctx.getSource().sendFailure(net.minecraft.network.chat.Component.literal("No effect " + id));
+			return 0;
+		}
+		var targets = net.minecraft.commands.arguments.EntityArgument.getEntities(ctx, "targets");
+		for (var t : targets) {
+			if (!(t.level() instanceof net.minecraft.server.level.ServerLevel level)) continue;
+			var at = t.position().add(0, height, 0);
+			Effects.play(level, def, at, at, ctx.getSource().getEntity(), t);
+		}
+		return targets.size();
 	}
 
 	private static int visit(com.mojang.brigadier.context.CommandContext<net.minecraft.commands.CommandSourceStack> ctx,

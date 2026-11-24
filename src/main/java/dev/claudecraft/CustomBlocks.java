@@ -630,6 +630,19 @@ public final class CustomBlocks {
 		}
 
 		@Override
+		protected BlockState updateShape(BlockState state, net.minecraft.world.level.LevelReader level, net.minecraft.world.level.ScheduledTickAccess ticks,
+				BlockPos pos, Direction dir, BlockPos neighborPos, BlockState neighbor, RandomSource random) {
+			if (level instanceof ServerLevel sl && Portals.breaks(sl, pos, state, dir, neighbor)) return Blocks.AIR.defaultBlockState();
+			return super.updateShape(state, level, ticks, pos, dir, neighborPos, neighbor, random);
+		}
+
+		@Override
+		protected void affectNeighborsAfterRemoval(BlockState state, ServerLevel level, BlockPos pos, boolean movedByPiston) {
+			Portals.forget(level, pos, state.getValue(VARIANT));
+			super.affectNeighborsAfterRemoval(state, level, pos, movedByPiston);
+		}
+
+		@Override
 		protected void neighborChanged(BlockState state, Level level, BlockPos pos, Block block, Orientation orientation, boolean movedByPiston) {
 			if (!(level instanceof ServerLevel sl)) return;
 			boolean powered = level.hasNeighborSignal(pos);
