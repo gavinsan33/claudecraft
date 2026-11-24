@@ -89,6 +89,13 @@ public class ClaudeCraftClient implements ClientModInitializer {
 		EntityRendererRegistry.register(CustomEntities.TYPE, CustomEntityRenderer::new);
 		EntityRendererRegistry.register(dev.claudecraft.CustomProjectiles.TYPE, ThrownRenderer::new);
 		EntityRendererRegistry.register(dev.claudecraft.Effects.TYPE, EffectRenderer::new);
+		net.fabricmc.fabric.api.client.rendering.v1.LivingEntityRenderLayerRegistrationCallback.EVENT.register((type, renderer, helper, ctx) -> {
+			if (renderer instanceof net.minecraft.client.renderer.entity.player.AvatarRenderer<?> avatar) {
+				@SuppressWarnings("unchecked")
+				var parent = (net.minecraft.client.renderer.entity.RenderLayerParent<net.minecraft.client.renderer.entity.state.AvatarRenderState, net.minecraft.client.model.player.PlayerModel>) (Object) avatar;
+				helper.register(new MorphLayer(parent));
+			}
+		});
 		net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents.END_CLIENT_TICK.register(CustomParticle::tick);
 		AnimatedBlocks.register();
 		OwnClaude.register();
@@ -98,6 +105,7 @@ public class ClaudeCraftClient implements ClientModInitializer {
 			BLOCK_MESHES.clear();
 			AnimatedBlocks.clear();
 			CustomEntityRenderer.PARTS.clear();
+			MorphLayer.PARSED.clear();
 			Minecraft mc = Minecraft.getInstance();
 			if (mc.level != null) {
 				for (var e : mc.level.entitiesForRendering()) if (e instanceof CustomEntities.CustomEntity) e.refreshDimensions(); // new hitbox sizes
