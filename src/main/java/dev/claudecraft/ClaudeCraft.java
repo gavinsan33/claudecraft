@@ -8,6 +8,8 @@ import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
@@ -40,6 +42,18 @@ public class ClaudeCraft implements ModInitializer {
 		CustomItems.register();
 		OreGeneration.register();
 		CustomRecipes.register();
+		RemoteLink.register();
+		ServerPlayNetworking.registerGlobalReceiver(RemoteLink.Payload.TYPE, (payload, ctx) -> {
+			if (bridge == null) return;
+			try {
+				bridge.onLink(ctx.player(), payload.parse());
+			} catch (RuntimeException e) {
+				LOGGER.warn("Bad ClaudeCraft link message from {}", ctx.player().getScoreboardName(), e);
+			}
+		});
+		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
+			if (bridge != null) bridge.onDisconnect(handler.player.getUUID());
+		});
 		net.minecraft.core.Registry.register(net.minecraft.core.registries.BuiltInRegistries.CHUNK_GENERATOR, CustomItems.id("custom"), CustomChunkGenerator.CODEC);
 
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> start(server, configDir));
@@ -48,7 +62,7 @@ public class ClaudeCraft implements ModInitializer {
 			if (builds != null) builds.tick();
 			CreatureSpawning.tick(server);
 			OreGeneration.tick(server);
-			if (bridge != null) bridge.tickStatus(builds);
+			if (bridge != null) bridge.tick(builds);
 		});
 
 		ServerMessageEvents.CHAT_MESSAGE.register((message, sender, params) -> {
@@ -134,6 +148,10 @@ public class ClaudeCraft implements ModInitializer {
 
 	static GameTools tools() {
 		return tools;
+	}
+
+	static ClaudeBridge bridge() {
+		return bridge;
 	}
 
 	/** Run a custom item's commands as the player using it. Server thread. */

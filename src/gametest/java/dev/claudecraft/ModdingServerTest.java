@@ -530,4 +530,34 @@ public class ModdingServerTest {
 			h.succeed();
 		});
 	}
+
+	@GameTest
+	public void concurrentSessionsGetSeparateUndoSteps(GameTestHelper h) {
+		ServerLevel level = h.getLevel();
+		UndoHistory undo = new UndoHistory();
+		BlockPos a = h.absolutePos(new BlockPos(1, 1, 1)), b = h.absolutePos(new BlockPos(2, 1, 1));
+		// Two sessions' turns interleave; each turn is still its own step.
+		undo.record(0, level, a, Blocks.STONE.defaultBlockState());
+		undo.record(1, level, b, Blocks.DIRT.defaultBlockState());
+		undo.commit(1);
+		h.assertValueEqual(undo.depth(), 2, "one sealed step plus one in progress");
+		// Session 0 undoing seals its own turn and pops it, leaving session 1's alone.
+		var popped = undo.pop(1, 0);
+		h.assertTrue(popped.size() == 1 && popped.getFirst().originals.get(level.dimension()).containsKey(a), "session 0 undoes its own turn");
+		h.assertValueEqual(undo.depth(), 1, "session 1's step remains");
+		// A player's /claude undo seals every session's in-progress changes.
+		undo.record(0, level, a, Blocks.STONE.defaultBlockState());
+		h.assertValueEqual(undo.pop(5, -1).size(), 2, "player undo takes in-progress and sealed steps");
+		h.succeed();
+	}
+
+	@GameTest
+	public void statusLineShowsEachSession(GameTestHelper h) {
+		h.assertValueEqual(ClaudeBridge.statusVerb(List.of()), "Building…", "only builds going up");
+		h.assertValueEqual(ClaudeBridge.statusVerb(List.of(new ClaudeBridge.Doing("Alex", "Surveying"))), "Surveying…",
+			"one session looks as it always did");
+		h.assertValueEqual(ClaudeBridge.statusVerb(List.of(new ClaudeBridge.Doing("Alex", "Surveying"), new ClaudeBridge.Doing("Sam", "Building"))),
+			"Alex: Surveying… · Sam: Building…", "two sessions are both shown, by player");
+		h.succeed();
+	}
 }

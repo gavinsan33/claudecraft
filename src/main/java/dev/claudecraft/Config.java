@@ -26,6 +26,21 @@ public class Config {
 	public int maxScanVolume = 32_768;
 	/** Port for the local MCP endpoint. 0 = pick a free port. */
 	public int mcpPort = 0;
+	/**
+	 * How many Claude sessions may work at once. Each is its own conversation: a player's follow-ups stay with the
+	 * session handling them, and a new request goes to an idle session instead of waiting. 1 = one at a time.
+	 */
+	public int maxConcurrentSessions = 2;
+	/**
+	 * Hosting: let players who set useOwnClaude run Claude on their own computer, with their own account. Their
+	 * Claude can then change this world through the same tools as yours, so only players on allowedPlayers may.
+	 */
+	public boolean allowPlayerClaude = false;
+	/**
+	 * Joining someone else's world: run Claude on this computer with your own account instead of the host's.
+	 * The host has to allow it (allowPlayerClaude); otherwise your messages go to the host's Claude as usual.
+	 */
+	public boolean useOwnClaude = false;
 	/** Kill a Claude turn that runs longer than this. */
 	public int turnTimeoutSeconds = 900;
 	/** Place blocks gradually so players can watch builds go up. false = instant. */
@@ -60,6 +75,22 @@ public class Config {
 		if (cfg.extraArgs == null) cfg.extraArgs = new ArrayList<>();
 		if (cfg.triggerPrefix == null) cfg.triggerPrefix = "";
 		return cfg;
+	}
+
+	/**
+	 * Change one setting in the file, leaving the rest as they are on disk. The host's world and its player's own game
+	 * share this file in singleplayer, so neither should write back settings it didn't change.
+	 */
+	public static synchronized void saveSetting(Path file, String key, com.google.gson.JsonElement value) {
+		try {
+			com.google.gson.JsonObject o = Files.exists(file)
+				? com.google.gson.JsonParser.parseString(Files.readString(file)).getAsJsonObject() : GSON.toJsonTree(new Config()).getAsJsonObject();
+			o.add(key, value);
+			Files.createDirectories(file.getParent());
+			Files.writeString(file, GSON.toJson(o));
+		} catch (Exception e) {
+			ClaudeCraft.LOGGER.error("Couldn't save {} to {}", key, file, e);
+		}
 	}
 
 	public boolean isAllowed(String playerName) {

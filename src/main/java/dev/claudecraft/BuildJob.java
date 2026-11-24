@@ -39,7 +39,7 @@ public final class BuildJob {
 	private final ServerLevel level;
 	private final Map<BlockPos, BlockState> targets;
 	private final List<BlockPos> order;
-	private final UndoHistory undo;
+	private final UndoHistory.Recorder undo;
 	private final boolean effects;
 	private final double rate;
 	private final java.util.function.Consumer<String> onFinish;
@@ -57,7 +57,7 @@ public final class BuildJob {
 	 * @param onFinish gets the result report before {@link #done} completes, may be null
 	 * @param mask checked against the world as each block is about to be placed; blocks that fail it are skipped. May be null
 	 */
-	public BuildJob(ServerLevel level, Map<BlockPos, BlockState> targets, UndoHistory undo, double blocksPerTick, boolean effects,
+	public BuildJob(ServerLevel level, Map<BlockPos, BlockState> targets, UndoHistory.Recorder undo, double blocksPerTick, boolean effects,
 			java.util.function.Consumer<String> onFinish, java.util.function.Predicate<BlockPos> mask) {
 		this.onFinish = onFinish;
 		this.mask = mask;

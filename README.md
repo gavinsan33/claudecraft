@@ -64,18 +64,35 @@ Just type in chat. Claude replies as `[Claude]`, and the bar above your hotbar s
 
 ## Settings
 
-Edit `config/claudecraft/config.json` in your Minecraft folder. The most useful ones:
+The **ClaudeCraft…** button in the corner of the pause menu opens a menu for the multiplayer settings. Changes there apply right away and are saved:
+- how many requests Claude works on at once
+- whether friends can use their own Claude
+- whether you use your own Claude
+
+Only the host or an operator can change the world's settings.
+
+Everything else is in `config/claudecraft/config.json` in your Minecraft folder. The most useful ones:
 
 | Setting | Default | What it does |
 |---|---|---|
 | `triggerPrefix` | `""` | Only send chat that starts with this, e.g. `"@claude"`. Empty sends every message |
 | `allowedPlayers` | `[]` | Who can talk to Claude. Empty means everyone |
 | `commandPermissionLevel` | `2` | What Claude's commands can do. 2 allows `/give`, `/tp`, `/summon` and the like; `/op` and `/ban` need 3 or 4 |
+| `maxConcurrentSessions` | `2` | How many requests Claude works on at once. Each is its own conversation; a player's follow-ups stay with the one handling them. `1` handles one request at a time |
 | `model` | `""` | Which Claude model to use. Empty uses your Claude Code default |
 | `animateBuilds` | `true` | `false` places builds instantly |
 | `maxBuildSeconds` | `12` | Longest a single build animation takes |
 
 You can also change how Claude behaves (chat style, building taste) in `config/claudecraft/system-prompt.md`. Changes apply on its next reply.
+
+### Friends using their own Claude
+
+When friends join your world, their messages normally go to your Claude and use your plan. A friend can run Claude on their own computer, with their own Claude Code account, instead:
+
+1. You (the host) turn on **Friends can use their own Claude** in the ClaudeCraft menu, or set `"allowPlayerClaude": true`. Only players allowed by `allowedPlayers` can use it.
+2. Your friend installs Claude Code, then turns on **Use my own Claude** in the menu, or sets `"useOwnClaude": true` in their own config.
+
+When they join, they'll see "your messages go to Claude on this computer". Their Claude builds in your world through the same tools as yours. Its replies show in chat as `[Name's Claude]`. `/claude stop`, `/claude reset` and `/claude undo` cover it too. Everything goes through the normal Minecraft connection, so it works with Essential or any other way of joining.
 
 ## Good to know
 

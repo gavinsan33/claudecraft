@@ -54,7 +54,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
 
 /** The MCP tools Claude uses to observe and act in the world. All world access runs on the server thread. */
-public class GameTools {
+public class GameTools implements McpServer.Tools {
 	/** Thrown for user-facing tool errors (bad arguments etc.). */
 	static class ToolError extends Exception {
 		ToolError(String msg) { super(msg); }
@@ -76,11 +76,24 @@ public class GameTools {
 	private final UndoHistory undo;
 	private final BuildQueue builds;
 	private final Map<String, Tool> tools = new LinkedHashMap<>();
-	/** Name of the player whose message Claude is currently handling. */
-	private volatile String defaultPlayer;
 	private final AtomicInteger buildIds = new AtomicInteger();
-	/** Results of background builds, handed to Claude with its next tool result. */
-	private final ConcurrentLinkedQueue<String> reports = new ConcurrentLinkedQueue<>();
+
+	/** State for one concurrent Claude session. Its tool calls say which session they're from (see {@link McpServer}). */
+	private static final class Session {
+		final int id;
+		/** Name of the player whose message this session is currently handling. */
+		volatile String player;
+		/** Results of background builds, handed to Claude with its next tool result. */
+		final ConcurrentLinkedQueue<String> reports = new ConcurrentLinkedQueue<>();
+		/** Builds run in order, so this session's newest build finishing means all of its builds are done. */
+		volatile CompletableFuture<String> lastBuild;
+
+		Session(int id) { this.id = id; }
+	}
+
+	private final Map<Integer, Session> sessions = new java.util.concurrent.ConcurrentHashMap<>();
+	/** The session whose tool is running on the server thread right now; null for player commands. Server thread only. */
+	private Session active;
 
 	public GameTools(MinecraftServer server, Config cfg, UndoHistory undo, BuildQueue builds) {
 		this.server = server;
@@ -90,21 +103,38 @@ public class GameTools {
 		registerAll();
 	}
 
-	public void setDefaultPlayer(String name) {
-		this.defaultPlayer = name;
+	private Session session(int id) {
+		return sessions.computeIfAbsent(id, Session::new);
+	}
+
+	/** The session a tool call is running for; tests that call handlers directly get session 0. */
+	private Session active() {
+		return active != null ? active : session(0);
+	}
+
+	public void setDefaultPlayer(int session, String name) {
+		session(session).player = name;
 	}
 
 	public UndoHistory undoHistory() {
 		return undo;
 	}
 
-	/** Completes once every queued build has been placed. Any thread. */
-	public CompletableFuture<Void> buildsIdle() {
-		return builds.idle();
+	/** Whether blocks this session queued are still going up. Any thread. */
+	public boolean isBuilding(int session) {
+		CompletableFuture<String> l = session(session).lastBuild;
+		return l != null && !l.isDone();
+	}
+
+	/** Completes once every build this session queued so far has been placed (or cancelled). Any thread. */
+	public CompletableFuture<Void> buildsIdle(int session) {
+		CompletableFuture<String> l = session(session).lastBuild;
+		return l == null ? CompletableFuture.completedFuture(null) : l.handle((r, e) -> null);
 	}
 
 	// ---------------------------------------------------------------- MCP plumbing
 
+	@Override
 	public JsonArray listTools() {
 		JsonArray arr = new JsonArray();
 		for (Tool t : tools.values()) {
@@ -117,12 +147,14 @@ public class GameTools {
 		return arr;
 	}
 
-	/** Run a tool's handler directly on the current (server) thread. For tests. */
+	/** Run a tool's handler directly on the current (server) thread, as session 0. For tests. */
 	Object runTool(String name, JsonObject args) throws Exception {
 		return tools.get(name).handler().run(args);
 	}
 
-	public JsonObject call(String name, JsonObject args) {
+	@Override
+	public JsonObject call(int sessionId, String name, JsonObject args) {
+		Session session = session(sessionId);
 		Tool tool = tools.get(name);
 		String text;
 		List<byte[]> images = List.of();
@@ -133,12 +165,16 @@ public class GameTools {
 		} else {
 			try {
 				Object result = server.submit(() -> {
+					Session prev = active;
+					active = session;
 					try {
 						return tool.handler().run(args);
 					} catch (RuntimeException e) {
 						throw e;
 					} catch (Exception e) {
 						throw new WrappedException(e);
+					} finally {
+						active = prev;
 					}
 				}).get(120, TimeUnit.SECONDS);
 				// Animated builds complete on a later tick; wait here (off the server thread) until they're done.
@@ -168,9 +204,18 @@ public class GameTools {
 				text = "Error: interrupted.";
 			}
 		}
+		return toolResult(text + drainReports(sessionId), images, error);
+	}
+
+	/** Background build results this session hasn't been told about yet, ready to append to a tool result. */
+	public String drainReports(int sessionId) {
 		StringBuilder finished = new StringBuilder();
-		for (String r; (r = reports.poll()) != null; ) finished.append('\n').append(r);
-		if (!finished.isEmpty()) text += "\n\nFinished in the background:" + finished;
+		for (String r; (r = session(sessionId).reports.poll()) != null; ) finished.append('\n').append(r);
+		return finished.isEmpty() ? "" : "\n\nFinished in the background:" + finished;
+	}
+
+	/** An MCP tools/call result: pictures first, then the text. */
+	public static JsonObject toolResult(String text, List<byte[]> images, boolean error) {
 		JsonObject result = new JsonObject();
 		JsonArray content = new JsonArray();
 		for (byte[] png : images) {
@@ -843,6 +888,7 @@ public class GameTools {
 			if (p == null) throw new ToolError("No online player named " + name);
 			return p;
 		}
+		String defaultPlayer = active().player;
 		if (defaultPlayer != null) {
 			ServerPlayer p = server.getPlayerList().getPlayerByName(defaultPlayer);
 			if (p != null) return p;
@@ -1005,23 +1051,30 @@ public class GameTools {
 		};
 	}
 
-	/** Queue a build and return right away; its result goes into {@link #reports} when it's done. */
+	/** Queue a build and return right away; its result goes into the session's reports when it's done. */
 	private String queueBuild(ServerLevel level, Map<BlockPos, BlockState> changes, JsonObject args) throws ToolError {
 		int id = buildIds.incrementAndGet();
 		double secs = args.has("duration_seconds") ? args.get("duration_seconds").getAsDouble() : 0;
-		builds.enqueue(level, changes, undo, secs, r -> reports.add("Build #" + id + ": " + r), mask(level, args));
+		Session s = active();
+		s.lastBuild = builds.enqueue(level, changes, undo.recorder(s.id), secs, r -> s.reports.add("Build #" + id + ": " + r),
+			mask(level, args));
 		return "Queued build #" + id + " (" + changes.size() + " blocks). Everything queued is done in about " + builds.secondsLeft()
 			+ "s. It's animating now; keep working.";
 	}
 
 	/** Run on the server thread once queued builds have finished, so reads see what they placed. */
 	private CompletableFuture<String> afterBuilds(Callable<Object> work) {
+		Session caller = active; // the work runs on a later tick; keep it attributed to the same session
 		return builds.idle().thenComposeAsync(v -> {
+			Session prev = active;
+			active = caller;
 			try {
 				Object r = work.call();
 				return r instanceof CompletableFuture<?> f ? f.thenApply(o -> (String) o) : CompletableFuture.completedFuture((String) r);
 			} catch (Exception e) {
 				return CompletableFuture.failedFuture(e);
+			} finally {
+				active = prev;
 			}
 		}, server);
 	}
@@ -1561,7 +1614,7 @@ public class GameTools {
 	}
 
 	private CompletableFuture<String> undoNow(int steps) {
-		List<UndoHistory.Entry> entries = undo.pop(Math.max(1, steps));
+		List<UndoHistory.Entry> entries = undo.pop(Math.max(1, steps), active == null ? -1 : active.id);
 		if (entries.isEmpty()) return CompletableFuture.completedFuture("Nothing to undo.");
 		List<CompletableFuture<String>> parts = new ArrayList<>();
 		for (UndoHistory.Entry entry : entries) {
@@ -2174,23 +2227,38 @@ public class GameTools {
 
 	private static final long MAX_VIEW_VOLUME = 1_000_000;
 
-	private CompletableFuture<Images> viewBuild(JsonObject args) throws ToolError {
-		ServerLevel level = level(args);
-		BlockPos a = pos(args, "from"), b = pos(args, "to");
-		List<String> views = new ArrayList<>();
-		if (args.has("views") && args.get("views").isJsonArray()) for (JsonElement e : args.getAsJsonArray("views")) views.add(e.getAsString());
-		if (views.isEmpty()) views.add("southeast");
-		if (views.size() > 4) throw new ToolError("At most 4 views per call.");
-		for (String v : views) if (!v.equals("top")) view(v);
-		int x0 = Math.min(a.getX(), b.getX()), z0 = Math.min(a.getZ(), b.getZ());
-		int y0 = Math.max(level.getMinY(), Math.min(a.getY(), b.getY())), y1 = Math.min(level.getMaxY(), Math.max(a.getY(), b.getY()));
-		int sx = Math.abs(a.getX() - b.getX()) + 1, sy = y1 - y0 + 1, sz = Math.abs(a.getZ() - b.getZ()) + 1;
-		long volume = (long) sx * sy * sz;
-		if (volume > MAX_VIEW_VOLUME) throw new ToolError("Box too big to view (" + volume + " blocks, max " + MAX_VIEW_VOLUME + ").");
+	/** A view_build request: the box to look at (clipped to the level's height) and which pictures to draw. */
+	private record ViewBox(int x0, int y0, int z0, int sx, int sy, int sz, List<String> views) {
+		static ViewBox of(JsonObject args, Level level) throws ToolError {
+			BlockPos a = pos(args, "from"), b = pos(args, "to");
+			List<String> views = new ArrayList<>();
+			if (args.has("views") && args.get("views").isJsonArray()) for (JsonElement e : args.getAsJsonArray("views")) views.add(e.getAsString());
+			if (views.isEmpty()) views.add("southeast");
+			if (views.size() > 4) throw new ToolError("At most 4 views per call.");
+			for (String v : views) if (!v.equals("top")) view(v);
+			int x0 = Math.min(a.getX(), b.getX()), z0 = Math.min(a.getZ(), b.getZ());
+			int y0 = Math.max(level.getMinY(), Math.min(a.getY(), b.getY())), y1 = Math.min(level.getMaxY(), Math.max(a.getY(), b.getY()));
+			int sx = Math.abs(a.getX() - b.getX()) + 1, sy = y1 - y0 + 1, sz = Math.abs(a.getZ() - b.getZ()) + 1;
+			long volume = (long) sx * sy * sz;
+			if (volume > MAX_VIEW_VOLUME) throw new ToolError("Box too big to view (" + volume + " blocks, max " + MAX_VIEW_VOLUME + ").");
+			return new ViewBox(x0, y0, z0, sx, sy, sz, views);
+		}
 
-		// Read the blocks on the server thread once builds are done; draw the pictures off it.
-		return builds.idle().thenApplyAsync(v -> {
-			int[] colors = new int[(int) volume];
+		String header() {
+			return "Box x " + x0 + ".." + (x0 + sx - 1) + ", y " + y0 + ".." + (y0 + sy - 1) + ", z " + z0 + ".." + (z0 + sz - 1) + ".";
+		}
+
+		/** Whether every chunk of the box is loaded in this level. */
+		boolean loaded(Level level) {
+			for (int cx = x0 >> 4; cx <= (x0 + sx - 1) >> 4; cx++) {
+				for (int cz = z0 >> 4; cz <= (z0 + sz - 1) >> 4; cz++) if (!level.getChunkSource().hasChunk(cx, cz)) return false;
+			}
+			return true;
+		}
+
+		/** Read the box's block colors. Run on the level's thread. */
+		Renderer.Snapshot read(Level level) {
+			int[] colors = new int[sx * sy * sz];
 			Map<Integer, Integer> customColors = new HashMap<>();
 			BlockPos.MutableBlockPos mp = new BlockPos.MutableBlockPos();
 			for (int y = 0; y < sy; y++) for (int z = 0; z < sz; z++) for (int x = 0; x < sx; x++) {
@@ -2202,11 +2270,56 @@ public class GameTools {
 				if (rgb != 0) colors[(y * sz + z) * sx + x] = rgb;
 			}
 			return new Renderer.Snapshot(colors, sx, sy, sz);
-		}, server).thenApplyAsync(snap -> render(snap, views,
-			"Box x " + x0 + ".." + (x0 + sx - 1) + ", y " + y0 + ".." + y1 + ", z " + z0 + ".." + (z0 + sz - 1) + "."));
+		}
 	}
 
-	/** A custom block's color in pictures: the average of its model's colors. */
+	private CompletableFuture<Images> viewBuild(JsonObject args) throws ToolError {
+		ServerLevel level = level(args);
+		ViewBox box = ViewBox.of(args, level);
+		// Read the blocks on the server thread once builds are done; draw the pictures off it.
+		return builds.idle().thenApplyAsync(v -> box.read(level), server)
+			.thenApplyAsync(snap -> render(snap, box.views(), box.header()));
+	}
+
+	/** Whether a view_build call could be answered from this level, i.e. it's for this dimension and the box is loaded. Level's thread. */
+	public static boolean canViewBuild(Level level, JsonObject args) {
+		if (args.has("dimension") && !args.get("dimension").getAsString().isBlank()) {
+			String dim = args.get("dimension").getAsString();
+			if (!dim.equals(level.dimension().identifier().toString()) && !dim.equals(level.dimension().identifier().getPath())) return false;
+		}
+		try {
+			return ViewBox.of(args, level).loaded(level);
+		} catch (ToolError | RuntimeException e) {
+			return false; // let the host report the problem
+		}
+	}
+
+	/**
+	 * view_build against a level this game has loaded, for a player whose own Claude asks (their client has the blocks
+	 * already, so nothing needs to come from the host). Reads blocks on levelThread and draws on the calling thread.
+	 * Returns null if the box isn't loaded after all.
+	 */
+	public static JsonObject viewBuildOn(Level level, java.util.concurrent.Executor levelThread, JsonObject args) {
+		try {
+			ViewBox box = ViewBox.of(args, level);
+			Renderer.Snapshot snap = CompletableFuture.supplyAsync(() -> box.loaded(level) ? box.read(level) : null, levelThread)
+				.get(60, TimeUnit.SECONDS);
+			if (snap == null) return null;
+			Images im = render(snap, box.views(), box.header());
+			return toolResult(im.text(), im.pngs(), false);
+		} catch (ToolError e) {
+			return toolResult("Error: " + e.getMessage(), List.of(), true);
+		} catch (Exception e) {
+			ClaudeCraft.LOGGER.warn("Local view_build failed", e);
+			return null;
+		}
+	}
+
+	/** Completes once every queued build (anyone's) has been placed. Any thread. */
+	public CompletableFuture<Void> allBuildsIdle() {
+		return builds.idle();
+	}
+
 	private static int customBlockColor(int slot) {
 		String id = CustomBlocks.idForSlot(slot);
 		JsonObject def = id == null ? null : CustomItems.DEFS.get(id);
