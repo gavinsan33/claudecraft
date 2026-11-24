@@ -802,7 +802,10 @@ public class GameTools implements McpServer.Tools {
 				+ "player parts are centered at head 0 28 0, body 0 18 0, right_arm -6 18 0, left_arm 6 18 0, right_leg "
 				+ "-2 6 0, left_leg 2 6 0. attach makes a part move with a vanilla body part (a belly with the body, horns "
 				+ "with the head; parts on an arm also show as the hand in first person); otherwise role animates it like a creature part (head looks around, legs and arms swing "
-				+ "with phase 0 or 1, wings flap, tails sway). Morph players with run_commands: claude morph <id> [players] "
+				+ "with phase 0 or 1, wings flap, tails sway). Every part must move with what it sits on: attach parts on the head to head, on an arm "
+				+ "to that arm, on a leg to that leg, on the torso to body; the result flags parts that don't. A morph that hides an arm must "
+				+ "give it a first-person hand: a part attached to that arm, placed where the arm was (view first_person for one that only "
+				+ "shows as the hand, like a spider leg). Morphed players don't show armor. Morph players with run_commands: claude morph <id> [players] "
 				+ "and claude unmorph [players]; it lasts through deaths and relogs. It changes looks only: for size, also "
 				+ "set the minecraft:scale attribute. Updating a morph changes everyone wearing it.",
 			"""
@@ -822,7 +825,8 @@ public class GameTools implements McpServer.Tools {
 				    "rotation":{"type":"array","items":{"type":"number"},"description":"[pitch, yaw, roll] degrees at rest, e.g. a spider leg splayed out sideways."},
 				    "role":{"type":"string","enum":["body","head","leg","arm","wing","tail","none"]},
 				    "phase":{"type":"integer","description":"legs and arms: 0 or 1."},
-				    "attach":{"type":"string","enum":["head","body","right_arm","left_arm","right_leg","left_leg"],"description":"Move with this vanilla body part (even a hidden one) instead of by role."}
+				    "attach":{"type":"string","enum":["head","body","right_arm","left_arm","right_leg","left_leg"],"description":"Move with this vanilla body part (even a hidden one) instead of by role."},
+				    "view":{"type":"string","enum":["both","first_person","third_person"],"description":"Where it shows: both (default), first_person (only as the hand you see) or third_person (only on your body)."}
 				  }}}
 				},"required":["id","name","parts"]}""",
 			this::defineMorph);

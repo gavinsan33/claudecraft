@@ -231,6 +231,19 @@ public final class Morphs {
 			for (String k : List.of("center", "scale", "rotation", "pivot")) {
 				if (p.has(k) && (!p.get(k).isJsonArray() || p.getAsJsonArray(k).size() != 3)) return "part " + i + ": " + k + " must be [x, y, z]";
 			}
+			if (p.has("view") && !VIEWS.contains(p.get("view").getAsString())) return "part " + i + ": view must be one of " + String.join(", ", VIEWS);
+		}
+		// A morph that hides an arm draws its own first-person hand: a part on that arm that shows in first person.
+		for (String arm : List.of("right_arm", "left_arm")) {
+			if (!hidden(def).contains(arm)) continue;
+			boolean hand = false;
+			for (JsonElement e : parts) {
+				JsonObject p = e.getAsJsonObject();
+				hand |= p.has("attach") && p.get("attach").getAsString().equals(arm) && !view(p).equals("third_person");
+			}
+			if (!hand) return "it hides " + arm + ", so give it a first-person hand: a part with attach " + arm + " (view first_person if it "
+				+ "should only show as the hand, e.g. a spider leg or a claw), placed around where the arm was (" + arm + " is 4x12x4 centered at "
+				+ (arm.equals("right_arm") ? "-6" : "6") + " 18 0)";
 		}
 		JsonObject vm = voxelModel(def);
 		if (vm != null) {
