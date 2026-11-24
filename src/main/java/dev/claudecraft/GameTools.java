@@ -779,6 +779,43 @@ public class GameTools implements McpServer.Tools {
 					CustomParticles.MAX_RATE, CustomParticles.MAX_BURST, VEC_EXPR, VEC_EXPR, VEC_EXPR),
 			this::defineEffect);
 
+		register("define_morph",
+			"Reshape how a player looks, using their own skin: morph them into a spider, give them a giant stomach, a "
+				+ "huge head, long arms, a tail or horns. hide removes vanilla body parts (a list of head, body, right_arm, "
+				+ "left_arm, right_leg, left_leg, or all), and parts add new ones. A skin part is a box cut from the player's "
+				+ "skin, textured like that vanilla part (and its outer layer): head 8x8x8 voxels, body 8x12x4, arms and legs "
+				+ "4x12x4; scale stretches it, center places it and rotation turns it [pitch, yaw, roll] in degrees about its "
+				+ "pivot (default its top center). Voxel parts are like define_entity's (layers, origin, pivot, colors from "
+				+ "palette) for what a skin doesn't have: eyes, fangs, horns, wings. Coordinates are define_entity's: voxels "
+				+ "with x = 0, z = 0 the player's center, y = 0 their feet, +z the way they face and +x their left. Standing "
+				+ "player parts are centered at head 0 28 0, body 0 18 0, right_arm -6 18 0, left_arm 6 18 0, right_leg "
+				+ "-2 6 0, left_leg 2 6 0. attach makes a part move with a vanilla body part (a belly with the body, horns "
+				+ "with the head; parts on an arm also show as the hand in first person); otherwise role animates it like a creature part (head looks around, legs and arms swing "
+				+ "with phase 0 or 1, wings flap, tails sway). Morph players with run_commands: claude morph <id> [players] "
+				+ "and claude unmorph [players]; it lasts through deaths and relogs. It changes looks only: for size, also "
+				+ "set the minecraft:scale attribute. Updating a morph changes everyone wearing it.",
+			"""
+				{"type":"object","properties":{
+				  "id":{"type":"string","description":"Lowercase letters, digits and underscores, e.g. spider_morph."},
+				  "name":{"type":"string"},
+				  "hide":{"description":"Vanilla parts to hide: all, or a list like [body]. Default none.","anyOf":[{"type":"string"},{"type":"array","items":{"type":"string","enum":["head","body","right_arm","left_arm","right_leg","left_leg"]}}]},
+				  "palette":{"type":"object","additionalProperties":{"type":"string"},"description":"Colors for voxel parts, #RRGGBB or #AARRGGBB."},
+				  "parts":{"type":"array","items":{"type":"object","properties":{
+				    "skin":{"type":"string","enum":["head","body","right_arm","left_arm","right_leg","left_leg"],"description":"A skin part: which piece of the skin to use."},
+				    "center":{"type":"array","items":{"type":"number"},"description":"skin parts: the box's center. Default where that vanilla part stands."},
+				    "scale":{"type":"array","items":{"type":"number"},"description":"skin parts: stretch [x, y, z], e.g. [1.6, 1, 3] for a big round belly."},
+				    "overlay":{"type":"boolean","description":"skin parts: include the skin's outer layer (default true)."},
+				    "layers":{"type":"array","items":{"type":"array","items":{"type":"string"}},"description":"A voxel part, like define_entity's."},
+				    "origin":{"type":"array","items":{"type":"integer"},"description":"voxel parts: where its layers start (the minimum corner)."},
+				    "pivot":{"type":"array","items":{"type":"number"},"description":"The point it turns around: a hip, shoulder, neck or wing root."},
+				    "rotation":{"type":"array","items":{"type":"number"},"description":"[pitch, yaw, roll] degrees at rest, e.g. a spider leg splayed out sideways."},
+				    "role":{"type":"string","enum":["body","head","leg","arm","wing","tail","none"]},
+				    "phase":{"type":"integer","description":"legs and arms: 0 or 1."},
+				    "attach":{"type":"string","enum":["head","body","right_arm","left_arm","right_leg","left_leg"],"description":"Move with this vanilla body part (even a hidden one) instead of by role."}
+				  }}}
+				},"required":["id","name","parts"]}""",
+			this::defineMorph);
+
 		register("play_effect",
 			"Play an effect so players can see it. By default it fires from the player's hand to what they're looking at (up "
 				+ "to 24 blocks), which suits beams; give from and to (the same point for orbs and bursts) to place it. follow "
@@ -1996,6 +2033,7 @@ public class GameTools implements McpServer.Tools {
 		JsonObject def = itemDef(args);
 		if (Dimensions.isDimension(def)) throw new ToolError(id(def) + " is a dimension; use visit_dimension");
 		if (Effects.isEffect(def)) throw new ToolError(id(def) + " is an effect; use play_effect");
+		if (Morphs.isMorph(def)) throw new ToolError(id(def) + " is a morph; use run_commands: claude morph " + id(def));
 		ServerPlayer p = player(args, "player");
 		if (p == null) throw new ToolError("No player to give it to");
 		ItemStack stack = CustomItems.stack(def, optInt(args, "count", 1));
@@ -2041,6 +2079,19 @@ public class GameTools implements McpServer.Tools {
 
 	private static final String VEC_EXPR = """
 		{"type":"object","properties":{"x":{"type":"string"},"y":{"type":"string"},"z":{"type":"string"}},"description":"particles: x, y, z expressions; missing ones are 0."}""";
+
+	private String defineMorph(JsonObject args) throws ToolError {
+		String id = checkId(args);
+		JsonObject old = CustomItems.DEFS.get(id);
+		if (old != null && !Morphs.isMorph(old)) throw new ToolError(id + " is already a custom " + kind(old) + "; pick another id");
+		JsonObject def = args.deepCopy();
+		def.addProperty("kind", "morph");
+		String bad = Morphs.validate(def);
+		if (bad != null) throw new ToolError(bad);
+		CustomItems.define(server, def);
+		return (old != null ? "Updated" : "Defined") + " morph " + id + ". Apply it with run_commands: claude morph " + id
+			+ " [players] (claude unmorph to undo). Pictures can't show morphs, so ask the player how it looks.";
+	}
 
 	private String playEffect(JsonObject args) throws ToolError {
 		String id = args.has("id") ? args.get("id").getAsString().replaceFirst("^custom:", "") : "";
@@ -2137,6 +2188,7 @@ public class GameTools implements McpServer.Tools {
 	private static String kind(JsonObject def) {
 		if (Dimensions.isDimension(def)) return "dimension";
 		if (Effects.isEffect(def)) return "effect";
+		if (Morphs.isMorph(def)) return "morph";
 		return CustomBlocks.isBlock(def) ? "block" : CustomEntities.isEntity(def) ? "creature" : "item";
 	}
 
@@ -2219,6 +2271,7 @@ public class GameTools implements McpServer.Tools {
 		JsonObject def = itemDef(args);
 		if (Dimensions.isDimension(def)) throw new ToolError(id(def) + " is a dimension; visit it, or view_build a box in it (dimension " + id(def) + ")");
 		if (Effects.isEffect(def)) throw new ToolError(id(def) + " is an effect; pictures can't show effects, so play it with play_effect and ask the player how it looks");
+		if (Morphs.isMorph(def)) throw new ToolError(id(def) + " is a morph; pictures can't show morphs, so morph the player and ask how it looks");
 		List<String> views = new ArrayList<>();
 		if (args.has("views") && args.get("views").isJsonArray()) for (JsonElement e : args.getAsJsonArray("views")) views.add(e.getAsString());
 		if (views.isEmpty()) views.add("southeast");

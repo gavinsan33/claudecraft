@@ -102,17 +102,22 @@ public class CustomEntityRenderer extends EntityRenderer<CustomEntities.CustomEn
 	}
 
 	private static void animate(PoseStack pose, EntityModel.Part p, State s) {
+		animate(pose, p.role(), p.phase(), p.pivot()[0], s, s.airborne);
+	}
+
+	/** Turn a part by its role at its pivot: heads look, legs and arms swing, wings flap, tails sway. Morphs use it too. */
+	static void animate(PoseStack pose, String role, int phase, float pivotX, net.minecraft.client.renderer.entity.state.LivingEntityRenderState s, boolean airborne) {
 		float walk = s.walkAnimationPos * 0.6662f, speed = Math.min(1, s.walkAnimationSpeed), age = s.ageInTicks;
-		switch (p.role()) {
+		switch (role) {
 			case "head" -> {
 				pose.rotateDegrees(Axis.YP, (-s.yRot));
 				pose.rotateDegrees(Axis.XP, (s.xRot));
 			}
-			case "leg" -> pose.rotate(Axis.XP, (Mth.cos(walk + p.phase() * Mth.PI) * 1.4f * speed));
-			case "arm" -> pose.rotate(Axis.XP, (Mth.cos(walk + (1 - p.phase()) * Mth.PI) * speed));
+			case "leg" -> pose.rotate(Axis.XP, (Mth.cos(walk + phase * Mth.PI) * 1.4f * speed));
+			case "arm" -> pose.rotate(Axis.XP, (Mth.cos(walk + (1 - phase) * Mth.PI) * speed));
 			case "wing" -> {
-				float side = p.pivot()[0] >= 0 ? 1 : -1;
-				float flap = s.airborne ? Mth.sin(age * 1.3f) * 0.8f : Mth.sin(age * 0.15f) * 0.08f;
+				float side = pivotX >= 0 ? 1 : -1;
+				float flap = airborne ? Mth.sin(age * 1.3f) * 0.8f : Mth.sin(age * 0.15f) * 0.08f;
 				pose.rotate(Axis.ZP, (flap * side));
 			}
 			case "tail" -> pose.rotate(Axis.YP, (Mth.sin(age * 0.2f) * 0.25f + Mth.cos(walk) * 0.4f * speed));

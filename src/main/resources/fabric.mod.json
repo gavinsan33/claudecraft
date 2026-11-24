@@ -8,6 +8,7 @@
 	"license": "MIT",
 	"icon": "assets/claudecraft/icon.png",
 	"environment": "*",
+	"mixins": ["claudecraft.mixins.json"],
 	"entrypoints": {
 		"main": ["dev.claudecraft.ClaudeCraft"],
 		"client": ["dev.claudecraft.client.ClaudeCraftClient"]

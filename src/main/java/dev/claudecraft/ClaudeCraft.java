@@ -120,6 +120,16 @@ public class ClaudeCraft implements ModInitializer {
 								.executes(ctx -> effectOn(ctx, 0))
 								.then(Commands.argument("height", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(-64, 64))
 									.executes(ctx -> effectOn(ctx, com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(ctx, "height"))))))))
+				// claude morph <id> [targets] / claude unmorph [targets]: reshape players with a morph from define_morph.
+				.then(Commands.literal("morph").requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
+					.then(Commands.argument("id", StringArgumentType.word())
+						.executes(ctx -> morph(ctx, StringArgumentType.getString(ctx, "id"), java.util.List.of(ctx.getSource().getPlayerOrException())))
+						.then(Commands.argument("targets", net.minecraft.commands.arguments.EntityArgument.players())
+							.executes(ctx -> morph(ctx, StringArgumentType.getString(ctx, "id"), net.minecraft.commands.arguments.EntityArgument.getPlayers(ctx, "targets"))))))
+				.then(Commands.literal("unmorph").requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
+					.executes(ctx -> morph(ctx, null, java.util.List.of(ctx.getSource().getPlayerOrException())))
+					.then(Commands.argument("targets", net.minecraft.commands.arguments.EntityArgument.players())
+						.executes(ctx -> morph(ctx, null, net.minecraft.commands.arguments.EntityArgument.getPlayers(ctx, "targets")))))
 				.then(Commands.literal("visit").requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
 					// For portals: a custom block's step_commands or use_commands run "claude visit <dimension>".
 					.then(Commands.argument("dimension", StringArgumentType.word())
@@ -214,6 +224,19 @@ public class ClaudeCraft implements ModInitializer {
 			Effects.play(level, def, at, at, ctx.getSource().getEntity(), t);
 		}
 		return targets.size();
+	}
+
+	private static int morph(com.mojang.brigadier.context.CommandContext<net.minecraft.commands.CommandSourceStack> ctx, String id,
+			java.util.Collection<ServerPlayer> players) {
+		if (id != null) {
+			id = id.replaceFirst("^custom:", "");
+			if (!Morphs.isMorph(CustomItems.DEFS.get(id))) {
+				ctx.getSource().sendFailure(net.minecraft.network.chat.Component.literal("No morph " + id + " (make one with define_morph)"));
+				return 0;
+			}
+		}
+		for (ServerPlayer p : players) Morphs.set(p, id);
+		return players.size();
 	}
 
 	private static int visit(com.mojang.brigadier.context.CommandContext<net.minecraft.commands.CommandSourceStack> ctx,
