@@ -790,7 +790,7 @@ public class GameTools implements McpServer.Tools {
 				+ "with x = 0, z = 0 the player's center, y = 0 their feet, +z the way they face and +x their left. Standing "
 				+ "player parts are centered at head 0 28 0, body 0 18 0, right_arm -6 18 0, left_arm 6 18 0, right_leg "
 				+ "-2 6 0, left_leg 2 6 0. attach makes a part move with a vanilla body part (a belly with the body, horns "
-				+ "with the head); otherwise role animates it like a creature part (head looks around, legs and arms swing "
+				+ "with the head; parts on an arm also show as the hand in first person); otherwise role animates it like a creature part (head looks around, legs and arms swing "
 				+ "with phase 0 or 1, wings flap, tails sway). Morph players with run_commands: claude morph <id> [players] "
 				+ "and claude unmorph [players]; it lasts through deaths and relogs. It changes looks only: for size, also "
 				+ "set the minecraft:scale attribute. Updating a morph changes everyone wearing it.",

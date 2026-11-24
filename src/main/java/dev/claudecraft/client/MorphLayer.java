@@ -21,6 +21,7 @@ import net.minecraft.client.renderer.entity.RenderLayerParent;
 import net.minecraft.client.renderer.entity.layers.RenderLayer;
 import net.minecraft.client.renderer.entity.state.AvatarRenderState;
 import net.minecraft.client.renderer.rendertype.RenderTypes;
+import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.PlayerModelType;
 
@@ -122,8 +123,7 @@ public final class MorphLayer extends RenderLayer<AvatarRenderState, PlayerModel
 		});
 	}
 
-	private ModelPart vanilla(String name) {
-		PlayerModel m = getParentModel();
+	private static ModelPart vanilla(PlayerModel m, String name) {
 		return switch (name) {
 			case "head" -> m.head;
 			case "body" -> m.body;
@@ -145,47 +145,79 @@ public final class MorphLayer extends RenderLayer<AvatarRenderState, PlayerModel
 		};
 	}
 
-	@Override
-	public void submit(PoseStack pose, SubmitNodeCollector collector, int light, AvatarRenderState s, float yRot, float xRot) {
-		JsonObject def = morph(s);
-		if (def == null || s.isInvisible) return;
-		Parsed m;
+	private static Parsed safeParsed(JsonObject def) {
 		try {
-			m = parsed(def);
+			return parsed(def);
 		} catch (RuntimeException e) {
-			return; // the server validates morphs, so only a corrupt save gets here
-		}
-		var skinType = RenderTypes.entityTranslucent(s.skin.body().texturePath());
-		boolean slim = s.skin.model() == PlayerModelType.SLIM;
-		int overlay = LivingEntityRenderer.getOverlayCoords(s, 0);
-		for (Part p : m.parts()) {
-			pose.pushPose();
-			if (p.attach() != null) {
-				// Follow the vanilla part: its current turn about its pivot (and any shift, like sneaking).
-				Morphs.Region a = Morphs.REGIONS.get(p.attach());
-				vanilla(p.attach()).translateAndRotate(pose);
-				pose.translate(-a.px() / 16, -a.py() / 16, -a.pz() / 16);
-			}
-			// Model space (y down, feet at 1.5 blocks, facing -z) to creature space (y up from the feet, facing +z).
-			pose.translate(0, 1.5f, 0);
-			pose.scale(1, -1, -1);
-			pose.translate(p.pivot()[0] / 16, p.pivot()[1] / 16, p.pivot()[2] / 16);
-			CustomEntityRenderer.animate(pose, p.role(), p.phase(), p.pivot()[0], s, s.isFallFlying);
-			pose.rotateDegrees(Axis.YP, p.rotation()[1]);
-			pose.rotateDegrees(Axis.XP, p.rotation()[0]);
-			pose.rotateDegrees(Axis.ZP, p.rotation()[2]);
-			if (p.skin() != null) {
-				Morphs.Region r = Morphs.REGIONS.get(p.skin());
-				pose.translate((p.center()[0] - p.pivot()[0]) / 16, (p.center()[1] - p.pivot()[1]) / 16, (p.center()[2] - p.pivot()[2]) / 16);
-				pose.scale(p.scale()[0], p.scale()[1], p.scale()[2]);
-				pose.scale(1, -1, -1); // back to model orientation, so the skin's face looks forward and its top up
-				collector.submitModelPart(box(r, p.skin(), slim, false), pose, skinType, light, overlay, null);
-				if (p.overlay() && overlayShown(p.skin(), s)) collector.submitModelPart(box(r, p.skin(), slim, true), pose, skinType, light, overlay, null);
-			} else {
-				ClaudeCraftClient.submitMesh(pose, collector, p.mesh(), light, overlay);
-			}
-			pose.popPose();
+			return null; // the server validates morphs, so only a corrupt save gets here
 		}
 	}
 
+	@Override
+	public void submit(PoseStack pose, SubmitNodeCollector collector, int light, AvatarRenderState s, float yRot, float xRot) {
+		JsonObject def = morph(s);
+		Parsed m = def == null || s.isInvisible ? null : safeParsed(def);
+		if (m == null) return;
+		var skinType = RenderTypes.entityTranslucent(s.skin.body().texturePath());
+		boolean slim = s.skin.model() == PlayerModelType.SLIM;
+		int overlay = LivingEntityRenderer.getOverlayCoords(s, 0);
+		for (Part p : m.parts()) draw(pose, collector, light, overlay, p, skinType, slim, getParentModel(), s, p.skin() != null && overlayShown(p.skin(), s));
+	}
+
+	public static String armName(PlayerModel model, ModelPart arm) {
+		return arm == model.rightArm ? "right_arm" : "left_arm";
+	}
+
+	/** First person: whether the local player's morph hides this arm, so the vanilla hand shouldn't be drawn. */
+	public static boolean firstPersonArmHidden(String arm) {
+		var player = Minecraft.getInstance().player;
+		JsonObject def = player == null ? null : Morphs.of(player);
+		Parsed m = def == null ? null : safeParsed(def);
+		return m != null && m.hidden().contains(arm);
+	}
+
+	/** First person: draw the local player's morph parts that are attached to this arm, where the hand is. */
+	public static void firstPersonParts(PoseStack pose, SubmitNodeCollector collector, int light, net.minecraft.resources.Identifier skin, PlayerModel model,
+			String arm, boolean sleeve) {
+		var player = Minecraft.getInstance().player;
+		JsonObject def = player == null ? null : Morphs.of(player);
+		Parsed m = def == null ? null : safeParsed(def);
+		if (m == null) return;
+		boolean slim = player.getSkin().model() == PlayerModelType.SLIM;
+		var still = new AvatarRenderState(); // no walk cycle or head turn in first person
+		for (Part p : m.parts()) {
+			if (arm.equals(p.attach())) draw(pose, collector, light, OverlayTexture.NO_OVERLAY, p, RenderTypes.entityTranslucent(skin), slim, model, still, sleeve);
+		}
+	}
+
+	/** One morph part, in the pose of the player model (feet at 1.5 blocks, y down, facing -z). */
+	private static void draw(PoseStack pose, SubmitNodeCollector collector, int light, int overlay, Part p, net.minecraft.client.renderer.rendertype.RenderType skinType,
+			boolean slim, PlayerModel model, AvatarRenderState s, boolean showOverlay) {
+		pose.pushPose();
+		if (p.attach() != null) {
+			// Follow the vanilla part: its current turn about its pivot (and any shift, like sneaking).
+			Morphs.Region a = Morphs.REGIONS.get(p.attach());
+			vanilla(model, p.attach()).translateAndRotate(pose);
+			pose.translate(-a.px() / 16, -a.py() / 16, -a.pz() / 16);
+		}
+		// Model space (y down, feet at 1.5 blocks, facing -z) to creature space (y up from the feet, facing +z).
+		pose.translate(0, 1.5f, 0);
+		pose.scale(1, -1, -1);
+		pose.translate(p.pivot()[0] / 16, p.pivot()[1] / 16, p.pivot()[2] / 16);
+		CustomEntityRenderer.animate(pose, p.role(), p.phase(), p.pivot()[0], s, s.isFallFlying);
+		pose.rotateDegrees(Axis.YP, p.rotation()[1]);
+		pose.rotateDegrees(Axis.XP, p.rotation()[0]);
+		pose.rotateDegrees(Axis.ZP, p.rotation()[2]);
+		if (p.skin() != null) {
+			Morphs.Region r = Morphs.REGIONS.get(p.skin());
+			pose.translate((p.center()[0] - p.pivot()[0]) / 16, (p.center()[1] - p.pivot()[1]) / 16, (p.center()[2] - p.pivot()[2]) / 16);
+			pose.scale(p.scale()[0], p.scale()[1], p.scale()[2]);
+			pose.scale(1, -1, -1); // back to model orientation, so the skin's face looks forward and its top up
+			collector.submitModelPart(box(r, p.skin(), slim, false), pose, skinType, light, overlay, null);
+			if (p.overlay() && showOverlay) collector.submitModelPart(box(r, p.skin(), slim, true), pose, skinType, light, overlay, null);
+		} else {
+			ClaudeCraftClient.submitMesh(pose, collector, p.mesh(), light, overlay);
+		}
+		pose.popPose();
+	}
 }
