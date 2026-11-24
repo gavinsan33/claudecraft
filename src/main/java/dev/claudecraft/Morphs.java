@@ -82,6 +82,136 @@ public final class Morphs {
 		return m;
 	}
 
+	/**
+	 * A wearable item's worn model (armor.worn) as a morph of voxel parts, or null if it has none. Its palette
+	 * defaults to the item's own. With mannequin, a gray player is added first, for pictures of how it fits.
+	 */
+	public static JsonObject worn(JsonObject item, boolean mannequin) {
+		JsonObject a = item == null ? null : CustomItems.props(item).getAsJsonObject("armor");
+		if (a == null || !a.has("worn") || !a.get("worn").isJsonObject()) return null;
+		JsonObject w = a.getAsJsonObject("worn");
+		JsonObject d = new JsonObject();
+		d.addProperty("id", "worn/" + item.get("id").getAsString());
+		JsonObject palette = w.has("palette") ? w.getAsJsonObject("palette").deepCopy()
+			: item.has("model") && item.getAsJsonObject("model").has("palette") ? item.getAsJsonObject("model").getAsJsonObject("palette").deepCopy() : new JsonObject();
+		JsonArray parts = new JsonArray();
+		if (mannequin) {
+			palette.addProperty(MANNEQUIN, "#9A9A9A");
+			for (var r : REGIONS.values()) {
+				JsonArray layers = new JsonArray();
+				for (int y = 0; y < r.h(); y++) {
+					JsonArray rows = new JsonArray();
+					for (int z = 0; z < r.d(); z++) rows.add(MANNEQUIN.repeat(r.w()));
+					layers.add(rows);
+				}
+				JsonObject p = new JsonObject();
+				p.add("layers", layers);
+				JsonArray origin = new JsonArray();
+				origin.add(Math.round(r.cx() - r.w() / 2f));
+				origin.add(Math.round(r.cy() - r.h() / 2f));
+				origin.add(Math.round(r.cz() - r.d() / 2f));
+				p.add("origin", origin);
+				parts.add(p);
+			}
+		}
+		if (w.has("parts") && w.get("parts").isJsonArray()) parts.addAll(w.getAsJsonArray("parts"));
+		d.add("palette", palette);
+		d.add("parts", parts);
+		return d;
+	}
+
+	private static final String MANNEQUIN = "\u2591";
+
+	/** Check a wearable's worn model, returning a problem or null. Only voxel parts: mobs and armor stands have no skin. */
+	static String validateWorn(JsonObject item) {
+		JsonObject d = worn(item, false);
+		if (d == null) return null;
+		if (d.getAsJsonArray("parts").isEmpty()) return "armor.worn needs parts";
+		for (JsonElement e : d.getAsJsonArray("parts")) {
+			if (!e.isJsonObject() || !e.getAsJsonObject().has("layers")) return "armor.worn parts are voxel parts: give each layers and origin";
+		}
+		String bad = validate(d);
+		return bad == null ? null : "armor.worn: " + bad;
+	}
+
+	/** Where a part shows: both (default), first_person (only as the hand you see) or third_person (only on your body). */
+	public static final List<String> VIEWS = List.of("both", "first_person", "third_person");
+
+	public static String view(JsonObject part) {
+		return part.has("view") ? part.get("view").getAsString() : "both";
+	}
+
+	/**
+	 * Parts that look stuck onto a visible body part but won't move with it: not attached to it (or attached to another
+	 * one), so they'd stay put while that limb swings or the head turns. Returned as advice for Claude; empty if all's well.
+	 */
+	static List<String> attachWarnings(JsonObject def) {
+		List<String> out = new java.util.ArrayList<>();
+		List<String> hidden = hidden(def);
+		int i = 0;
+		for (JsonElement e : def.getAsJsonArray("parts")) {
+			i++;
+			JsonObject p = e.getAsJsonObject();
+			if (view(p).equals("first_person")) continue;
+			float[] lo = new float[3], hi = new float[3];
+			if (p.has("skin")) {
+				Region r = REGIONS.get(p.get("skin").getAsString());
+				float[] c = vec(p, "center", new float[]{r.cx(), r.cy(), r.cz()}), s = vec(p, "scale", new float[]{1, 1, 1});
+				float[] half = {r.w() * s[0] / 2, r.h() * s[1] / 2, r.d() * s[2] / 2};
+				for (int k = 0; k < 3; k++) {
+					lo[k] = c[k] - half[k];
+					hi[k] = c[k] + half[k];
+				}
+			} else {
+				float[] o = vec(p, "origin", new float[3]);
+				JsonArray layers = p.getAsJsonArray("layers");
+				int sx = 0, sz = 0;
+				for (JsonElement l : layers) {
+					sz = Math.max(sz, l.getAsJsonArray().size());
+					for (JsonElement row : l.getAsJsonArray()) sx = Math.max(sx, row.getAsString().codePointCount(0, row.getAsString().length()));
+				}
+				lo = o.clone();
+				hi = new float[]{o[0] + sx, o[1] + layers.size(), o[2] + sz};
+			}
+			String attach = p.has("attach") ? p.get("attach").getAsString() : null;
+			if (attach != null && overlap(REGIONS.get(attach), lo, hi) > 0) continue; // on what it's attached to (even a hidden one)
+			// The visible body part it overlaps most, counting two voxels around it, for clothes and things resting on it.
+			String best = null;
+			float bestVol = 0;
+			for (var r : REGIONS.entrySet()) {
+				if (hidden.contains(r.getKey())) continue;
+				float vol = overlap(r.getValue(), lo, hi);
+				if (vol > bestVol) {
+					bestVol = vol;
+					best = r.getKey();
+				}
+			}
+			if (best == null) continue;
+			String role = p.has("role") ? p.get("role").getAsString() : "none";
+			if (attach == null && (role.equals("none") || role.equals("body"))) {
+				out.add("part " + i + " sits on the " + best.replace('_', ' ') + " but isn't attached, so it won't move with it: add attach " + best);
+			} else if (attach != null && !attach.equals(best)) {
+				out.add("part " + i + " is attached to the " + attach.replace('_', ' ') + " but sits on the " + best.replace('_', ' ')
+					+ "; attach it to " + best + " unless it really should move with the " + attach.replace('_', ' '));
+			}
+		}
+		return out;
+	}
+
+	/** How much a box overlaps a body part, counting two voxels around the part. */
+	private static float overlap(Region g, float[] lo, float[] hi) {
+		float vol = 1;
+		float[] gc = {g.cx(), g.cy(), g.cz()}, gh = {g.w() / 2f + 2, g.h() / 2f + 2, g.d() / 2f + 2};
+		for (int k = 0; k < 3; k++) vol *= Math.max(0, Math.min(hi[k], gc[k] + gh[k]) - Math.max(lo[k], gc[k] - gh[k]));
+		return vol;
+	}
+
+	private static float[] vec(JsonObject p, String key, float[] dflt) {
+		if (!p.has(key) || !p.get(key).isJsonArray()) return dflt;
+		JsonArray a = p.getAsJsonArray(key);
+		return new float[]{a.get(0).getAsFloat(), a.get(1).getAsFloat(), a.get(2).getAsFloat()};
+	}
+
 	/** Check a morph definition, returning a problem or null. */
 	static String validate(JsonObject def) {
 		for (String h : hidden(def)) if (!REGIONS.containsKey(h)) return "hide: " + h + " isn't one of all, " + String.join(", ", REGIONS.keySet());
@@ -101,6 +231,19 @@ public final class Morphs {
 			for (String k : List.of("center", "scale", "rotation", "pivot")) {
 				if (p.has(k) && (!p.get(k).isJsonArray() || p.getAsJsonArray(k).size() != 3)) return "part " + i + ": " + k + " must be [x, y, z]";
 			}
+			if (p.has("view") && !VIEWS.contains(p.get("view").getAsString())) return "part " + i + ": view must be one of " + String.join(", ", VIEWS);
+		}
+		// A morph that hides an arm draws its own first-person hand: a part on that arm that shows in first person.
+		for (String arm : List.of("right_arm", "left_arm")) {
+			if (!hidden(def).contains(arm)) continue;
+			boolean hand = false;
+			for (JsonElement e : parts) {
+				JsonObject p = e.getAsJsonObject();
+				hand |= p.has("attach") && p.get("attach").getAsString().equals(arm) && !view(p).equals("third_person");
+			}
+			if (!hand) return "it hides " + arm + ", so give it a first-person hand: a part with attach " + arm + " (view first_person if it "
+				+ "should only show as the hand, e.g. a spider leg or a claw), placed around where the arm was (" + arm + " is 4x12x4 centered at "
+				+ (arm.equals("right_arm") ? "-6" : "6") + " 18 0)";
 		}
 		JsonObject vm = voxelModel(def);
 		if (vm != null) {

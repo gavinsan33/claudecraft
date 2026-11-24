@@ -503,7 +503,16 @@ public class GameTools implements McpServer.Tools {
 				    "armor":{"type":"object","description":"Wearable in a slot: right-click to put on.","properties":{
 				      "slot":{"type":"string","enum":%s},"armor":{"type":"number","description":"Armor points; a diamond chestplate has 8, helmet 3."},
 				      "toughness":{"type":"number"},"knockback_resistance":{"type":"number","description":"0 to 1."},
-				      "look":{"type":"string","enum":%s,"description":"How it looks when worn: model shows your voxel model on the head (head slot only); the others reuse that vanilla armor's look. Default: model for head, leather otherwise."},
+				      "look":{"type":"string","enum":%s,"description":"How it looks when worn: worn draws your worn parts (the default when you give them); model shows the item's own model on the head, one block big (head slot only); the others reuse that vanilla armor's look. Otherwise: model for head, leather elsewhere."},
+				      "worn":{"type":"object","description":"Your own design for how it looks on the wearer, at any size: a tall top hat, a tank top, a crown, a cape, wings, a backpack, sneakers. Voxel parts in the wearer's space, like define_morph's: x = 0, z = 0 their center, y = 0 their feet, +z the way they face and +x their left, 16 voxels per block, so one voxel is one skin pixel. The body underneath: head 8x8x8 from -4 24 -4, body 8x12x4 from -4 12 -2, right arm 4x12x4 from -8 12 -2, left arm from 4 12 -2, right leg 4x12x4 from -4 0 -2, left leg from 0 0 -2. Clothes are a 1-voxel shell around that (a shirt's body is 10x12x6 from -5 12 -3, hollow). Give each part attach so it moves with that body part. Works on players, mobs and armor stands. Check it with view_item worn: true.","properties":{
+				        "palette":{"type":"object","additionalProperties":{"type":"string"},"description":"Default: the item's palette."},
+				        "parts":{"type":"array","items":{"type":"object","properties":{
+				          "layers":{"type":"array","items":{"type":"array","items":{"type":"string"}}},
+				          "origin":{"type":"array","items":{"type":"integer"},"description":"Where its layers start: the minimum corner."},
+				          "attach":{"type":"string","enum":["head","body","right_arm","left_arm","right_leg","left_leg"]},
+				          "pivot":{"type":"array","items":{"type":"number"}},"role":{"type":"string","enum":["none","wing","tail"],"description":"Optional motion of its own: wing flaps, tail sways."}
+				        },"required":["layers","origin"]}}
+				      }},
 				      "color":{"type":"string","description":"#RRGGBB tint for the leather look; default is the model's average color."}}},
 				    "shoot":%s,
 				    "use_commands":{"type":"array","items":{"type":"string"},"description":"Run as the player on right-click (or when eaten, for food). @s is the player, ~ ~ ~ their position."},
@@ -701,11 +710,13 @@ public class GameTools implements McpServer.Tools {
 
 		register("view_item",
 			"See a picture of a custom item's, block's or creature's voxel model (creatures at rest), drawn like view_build (flat-shaded cubes, see-through colors shown "
-				+ "solid). Use it to check a new design before giving it out.",
+				+ "solid). Use it to check a new design before giving it out. worn: true shows a wearable's worn parts on a gray "
+				+ "player, facing south (+z), to check the fit.",
 			"""
 				{"type":"object","properties":{
 				  "id":{"type":"string"},
-				  "views":{"type":"array","items":{"type":"string","enum":["southeast","southwest","northwest","northeast","top"]}}
+				  "views":{"type":"array","items":{"type":"string","enum":["southeast","southwest","northwest","northeast","top"]}},
+				  "worn":{"type":"boolean"}
 				},"required":["id"]}""",
 			this::viewItem);
 
@@ -791,7 +802,10 @@ public class GameTools implements McpServer.Tools {
 				+ "player parts are centered at head 0 28 0, body 0 18 0, right_arm -6 18 0, left_arm 6 18 0, right_leg "
 				+ "-2 6 0, left_leg 2 6 0. attach makes a part move with a vanilla body part (a belly with the body, horns "
 				+ "with the head; parts on an arm also show as the hand in first person); otherwise role animates it like a creature part (head looks around, legs and arms swing "
-				+ "with phase 0 or 1, wings flap, tails sway). Morph players with run_commands: claude morph <id> [players] "
+				+ "with phase 0 or 1, wings flap, tails sway). Every part must move with what it sits on: attach parts on the head to head, on an arm "
+				+ "to that arm, on a leg to that leg, on the torso to body; the result flags parts that don't. A morph that hides an arm must "
+				+ "give it a first-person hand: a part attached to that arm, placed where the arm was (view first_person for one that only "
+				+ "shows as the hand, like a spider leg). Morphed players don't show armor. Morph players with run_commands: claude morph <id> [players] "
 				+ "and claude unmorph [players]; it lasts through deaths and relogs. It changes looks only: for size, also "
 				+ "set the minecraft:scale attribute. Updating a morph changes everyone wearing it.",
 			"""
@@ -811,7 +825,8 @@ public class GameTools implements McpServer.Tools {
 				    "rotation":{"type":"array","items":{"type":"number"},"description":"[pitch, yaw, roll] degrees at rest, e.g. a spider leg splayed out sideways."},
 				    "role":{"type":"string","enum":["body","head","leg","arm","wing","tail","none"]},
 				    "phase":{"type":"integer","description":"legs and arms: 0 or 1."},
-				    "attach":{"type":"string","enum":["head","body","right_arm","left_arm","right_leg","left_leg"],"description":"Move with this vanilla body part (even a hidden one) instead of by role."}
+				    "attach":{"type":"string","enum":["head","body","right_arm","left_arm","right_leg","left_leg"],"description":"Move with this vanilla body part (even a hidden one) instead of by role."},
+				    "view":{"type":"string","enum":["both","first_person","third_person"],"description":"Where it shows: both (default), first_person (only as the hand you see) or third_person (only on your body)."}
 				  }}}
 				},"required":["id","name","parts"]}""",
 			this::defineMorph);
@@ -1846,8 +1861,15 @@ public class GameTools implements McpServer.Tools {
 			oneOf(armor, "slot", CustomItems.ARMOR_SLOTS, "armor.slot");
 			oneOf(armor, "look", CustomItems.ARMOR_LOOKS, "armor.look");
 			if (armor.has("look") && armor.get("look").getAsString().equals("model") && armor.has("slot") && !armor.get("slot").getAsString().equals("head")) {
-				throw new ToolError("armor.look model only works on the head; use leather (tinted with color) or another vanilla look for other slots");
+				throw new ToolError("armor.look model only works on the head; give worn parts for a custom look, or use a vanilla look");
 			}
+			if (armor.has("look") && armor.get("look").getAsString().equals("worn") && !armor.has("worn")) throw new ToolError("armor.look worn needs armor.worn parts");
+			JsonObject probe = new JsonObject();
+			probe.addProperty("id", id);
+			probe.add("model", model);
+			probe.add("properties", props);
+			String badWorn = Morphs.validateWorn(probe);
+			if (badWorn != null) throw new ToolError(badWorn);
 		}
 		JsonObject shoot = obj(props, "shoot");
 		if (shoot != null) {
@@ -1870,7 +1892,8 @@ public class GameTools implements McpServer.Tools {
 		checkRecipes(def);
 		CustomItems.define(server, def);
 		return (old != null ? "Updated" : "Defined") + " custom item " + id + " (" + parsed.sx + "x" + parsed.sy + "x" + parsed.sz
-			+ " voxels). Hand it out with give_item, or check it with view_item." + recipeNote(def);
+			+ " voxels). Hand it out with give_item, or check it with view_item." + recipeNote(def)
+			+ (Morphs.worn(def, false) != null ? " Check the fit with view_item worn: true." + attachAdvice(Morphs.attachWarnings(Morphs.worn(def, false))) : "");
 	}
 
 	private String defineBlock(JsonObject args) throws ToolError {
@@ -2090,7 +2113,12 @@ public class GameTools implements McpServer.Tools {
 		if (bad != null) throw new ToolError(bad);
 		CustomItems.define(server, def);
 		return (old != null ? "Updated" : "Defined") + " morph " + id + ". Apply it with run_commands: claude morph " + id
-			+ " [players] (claude unmorph to undo). Pictures can't show morphs, so ask the player how it looks.";
+			+ " [players] (claude unmorph to undo). Pictures can't show morphs, so ask the player how it looks." + attachAdvice(Morphs.attachWarnings(def));
+	}
+
+	/** Movement problems worth fixing, as a sentence for a tool result; empty if there are none. */
+	private static String attachAdvice(List<String> warnings) {
+		return warnings.isEmpty() ? "" : " Check how it moves: " + String.join("; ", warnings) + ".";
 	}
 
 	private String playEffect(JsonObject args) throws ToolError {
@@ -2279,8 +2307,16 @@ public class GameTools implements McpServer.Tools {
 		for (String v : views) if (!v.equals("top")) view(v);
 		int[] argb;
 		int sx, sy, sz;
-		if (CustomEntities.isEntity(def)) {
-			EntityModel em = CustomEntities.model(id(def));
+		boolean worn = args.has("worn") && args.get("worn").getAsBoolean();
+		JsonObject wornModel = worn ? Morphs.worn(def, true) : null;
+		if (worn && wornModel == null) throw new ToolError(id(def) + " has no armor.worn parts");
+		if (wornModel != null || CustomEntities.isEntity(def)) {
+			EntityModel em;
+			try {
+				em = wornModel != null ? EntityModel.parse(wornModel, 16) : CustomEntities.model(id(def));
+			} catch (RuntimeException e) {
+				throw new ToolError("Can't draw it worn: " + e.getMessage());
+			}
 			if (em == null) throw new ToolError("That creature's model is broken; redefine it");
 			argb = em.flatten();
 			sx = em.maxX - em.minX;
@@ -2300,7 +2336,8 @@ public class GameTools implements McpServer.Tools {
 		}
 		Renderer.Snapshot snap = new Renderer.Snapshot(rgb, sx, sy, sz);
 		String header = def.get("name").getAsString() + " (" + sx + "x" + sy + "x" + sz + " voxels)."
-			+ (CustomEntities.isEntity(def) ? " The creature faces south (+z) in these pictures." : "");
+			+ (CustomEntities.isEntity(def) ? " The creature faces south (+z) in these pictures." : "")
+			+ (worn ? " Worn on a gray player facing south (+z)." : "");
 		return CompletableFuture.supplyAsync(() -> render(snap, views, header));
 	}
 

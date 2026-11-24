@@ -20,6 +20,7 @@ import net.minecraft.client.renderer.entity.LivingEntityRenderer;
 import net.minecraft.client.renderer.entity.RenderLayerParent;
 import net.minecraft.client.renderer.entity.layers.RenderLayer;
 import net.minecraft.client.renderer.entity.state.AvatarRenderState;
+import net.minecraft.client.renderer.entity.state.HumanoidRenderState;
 import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.world.entity.Entity;
@@ -42,7 +43,7 @@ public final class MorphLayer extends RenderLayer<AvatarRenderState, PlayerModel
 	static final Map<String, Parsed> PARSED = new ConcurrentHashMap<>();
 
 	record Part(String skin, float[] center, float[] scale, float[] rotation, float[] pivot, String role, int phase, String attach,
-		boolean overlay, ClaudeCraftClient.Mesh mesh) {}
+		boolean overlay, ClaudeCraftClient.Mesh mesh, String view) {}
 
 	record Parsed(List<Part> parts, List<String> hidden) {}
 
@@ -84,6 +85,15 @@ public final class MorphLayer extends RenderLayer<AvatarRenderState, PlayerModel
 		return new float[]{a.get(0).getAsFloat(), a.get(1).getAsFloat(), a.get(2).getAsFloat()};
 	}
 
+	/** A wearable item's worn parts, parsed and cached; null if it has none. */
+	static Parsed worn(JsonObject item) {
+		if (item == null) return null;
+		Parsed cached = PARSED.get("worn/" + item.get("id").getAsString());
+		if (cached != null) return cached;
+		JsonObject w = Morphs.worn(item, false);
+		return w == null ? null : safeParsed(w);
+	}
+
 	static Parsed parsed(JsonObject def) {
 		return PARSED.computeIfAbsent(def.get("id").getAsString(), k -> {
 			List<Part> out = new ArrayList<>();
@@ -102,10 +112,10 @@ public final class MorphLayer extends RenderLayer<AvatarRenderState, PlayerModel
 					float[] center = vec(p, "center", new float[]{r.cx(), r.cy(), r.cz()});
 					float[] pivot = vec(p, "pivot", new float[]{center[0], center[1] + r.h() * scale[1] / 2, center[2]});
 					boolean overlay = !p.has("overlay") || p.get("overlay").getAsBoolean();
-					out.add(new Part(p.get("skin").getAsString(), center, scale, rot, pivot, role, phase, attach, overlay, null));
+					out.add(new Part(p.get("skin").getAsString(), center, scale, rot, pivot, role, phase, attach, overlay, null, Morphs.view(p)));
 				} else {
 					EntityModel.Part vp = voxels.parts.get(v++);
-					out.add(new Part(null, null, null, rot, vp.pivot(), role, phase, attach, false, ClaudeCraftClient.Mesh.split(voxels.mesh(vp))));
+					out.add(new Part(null, null, null, rot, vp.pivot(), role, phase, attach, false, ClaudeCraftClient.Mesh.split(voxels.mesh(vp)), Morphs.view(p)));
 				}
 			}
 			return new Parsed(out, Morphs.hidden(def));
@@ -123,7 +133,7 @@ public final class MorphLayer extends RenderLayer<AvatarRenderState, PlayerModel
 		});
 	}
 
-	private static ModelPart vanilla(PlayerModel m, String name) {
+	private static ModelPart vanilla(net.minecraft.client.model.HumanoidModel<?> m, String name) {
 		return switch (name) {
 			case "head" -> m.head;
 			case "body" -> m.body;
@@ -161,11 +171,23 @@ public final class MorphLayer extends RenderLayer<AvatarRenderState, PlayerModel
 		var skinType = RenderTypes.entityTranslucent(s.skin.body().texturePath());
 		boolean slim = s.skin.model() == PlayerModelType.SLIM;
 		int overlay = LivingEntityRenderer.getOverlayCoords(s, 0);
-		for (Part p : m.parts()) draw(pose, collector, light, overlay, p, skinType, slim, getParentModel(), s, p.skin() != null && overlayShown(p.skin(), s));
+		for (Part p : m.parts()) {
+			if (!p.view().equals("first_person")) draw(pose, collector, light, overlay, p, skinType, slim, getParentModel(), s, p.skin() != null && overlayShown(p.skin(), s));
+		}
 	}
 
 	public static String armName(PlayerModel model, ModelPart arm) {
 		return arm == model.rightArm ? "right_arm" : "left_arm";
+	}
+
+	/** Morphed players wear no visible armor, head items, elytra, cape or wearables: they'd sit where the vanilla body was. */
+	public static void stripEquipment(net.minecraft.world.entity.Entity player, AvatarRenderState s) {
+		if (Morphs.of(player) == null) return;
+		s.headEquipment = s.chestEquipment = s.legsEquipment = s.feetEquipment = net.minecraft.world.item.ItemStack.EMPTY;
+		s.headItem.clear();
+		s.wornHeadType = null;
+		s.wornHeadProfile = null;
+		s.showCape = false;
 	}
 
 	/** First person: whether the local player's morph hides this arm, so the vanilla hand shouldn't be drawn. */
@@ -186,13 +208,13 @@ public final class MorphLayer extends RenderLayer<AvatarRenderState, PlayerModel
 		boolean slim = player.getSkin().model() == PlayerModelType.SLIM;
 		var still = new AvatarRenderState(); // no walk cycle or head turn in first person
 		for (Part p : m.parts()) {
-			if (arm.equals(p.attach())) draw(pose, collector, light, OverlayTexture.NO_OVERLAY, p, RenderTypes.entityTranslucent(skin), slim, model, still, sleeve);
+			if (arm.equals(p.attach()) && !p.view().equals("third_person")) draw(pose, collector, light, OverlayTexture.NO_OVERLAY, p, RenderTypes.entityTranslucent(skin), slim, model, still, sleeve);
 		}
 	}
 
 	/** One morph part, in the pose of the player model (feet at 1.5 blocks, y down, facing -z). */
-	private static void draw(PoseStack pose, SubmitNodeCollector collector, int light, int overlay, Part p, net.minecraft.client.renderer.rendertype.RenderType skinType,
-			boolean slim, PlayerModel model, AvatarRenderState s, boolean showOverlay) {
+	static void draw(PoseStack pose, SubmitNodeCollector collector, int light, int overlay, Part p, net.minecraft.client.renderer.rendertype.RenderType skinType,
+			boolean slim, net.minecraft.client.model.HumanoidModel<?> model, net.minecraft.client.renderer.entity.state.LivingEntityRenderState s, boolean showOverlay) {
 		pose.pushPose();
 		if (p.attach() != null) {
 			// Follow the vanilla part: its current turn about its pivot (and any shift, like sneaking).
@@ -204,7 +226,7 @@ public final class MorphLayer extends RenderLayer<AvatarRenderState, PlayerModel
 		pose.translate(0, 1.5f, 0);
 		pose.scale(1, -1, -1);
 		pose.translate(p.pivot()[0] / 16, p.pivot()[1] / 16, p.pivot()[2] / 16);
-		CustomEntityRenderer.animate(pose, p.role(), p.phase(), p.pivot()[0], s, s.isFallFlying);
+		CustomEntityRenderer.animate(pose, p.role(), p.phase(), p.pivot()[0], s, s instanceof HumanoidRenderState h && h.isFallFlying);
 		pose.rotateDegrees(Axis.YP, p.rotation()[1]);
 		pose.rotateDegrees(Axis.XP, p.rotation()[0]);
 		pose.rotateDegrees(Axis.ZP, p.rotation()[2]);

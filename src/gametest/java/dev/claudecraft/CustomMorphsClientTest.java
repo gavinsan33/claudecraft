@@ -31,15 +31,33 @@ public class CustomMorphsClientTest implements FabricClientGameTest {
 			{"id":"spider","name":"Spider","hide":"all","palette":{"r":"#E01010"},"parts":[
 			 {"skin":"body","center":[0,8,-5],"pivot":[0,8,-5],"scale":[1.5,0.9,2.4],"rotation":[90,0,0]},
 			 {"skin":"head","center":[0,8,4],"pivot":[0,8,1],"scale":[1,0.85,1],"role":"head"},
-			 {"layers":[["r.r"]],"origin":[-2,9,8],"pivot":[0,8,1],"role":"head"}%s]}""".formatted(legs);
+			 {"layers":[["r.r"]],"origin":[-2,9,8],"pivot":[0,8,1],"role":"head"},
+			 {"skin":"right_arm","scale":[0.6,1.2,0.6],"attach":"right_arm","view":"first_person"},
+			 {"skin":"left_arm","scale":[0.6,1.2,0.6],"attach":"left_arm","view":"first_person"}%s]}""".formatted(legs);
+	}
+
+	private static JsonObject parse(String json) {
+		JsonObject def = JsonParser.parseString(json).getAsJsonObject();
+		def.addProperty("kind", "morph");
+		return def;
 	}
 
 	private static void define(net.minecraft.server.MinecraftServer server, String json) {
-		JsonObject def = JsonParser.parseString(json).getAsJsonObject();
-		def.addProperty("kind", "morph");
+		JsonObject def = parse(json);
 		String bad = Morphs.validate(def);
 		if (bad != null) throw new AssertionError(bad);
+		if (!Morphs.attachWarnings(def).isEmpty()) throw new AssertionError(def.get("id") + " should move right: " + Morphs.attachWarnings(def));
 		CustomItems.define(server, def);
+	}
+
+	/** Hiding an arm without a hand is refused; horns resting on the head but not attached to it are flagged. */
+	private static void checkRules() {
+		if (Morphs.validate(parse("{\"id\":\"armless\",\"name\":\"Armless\",\"hide\":[\"right_arm\"],\"parts\":[]}")) == null) {
+			throw new AssertionError("hiding an arm without a first-person hand should be refused");
+		}
+		var horns = parse("{\"id\":\"horns\",\"name\":\"Horns\",\"palette\":{\"h\":\"#DDDDDD\"},\"parts\":[{\"layers\":[[\"h\"],[\"h\"]],\"origin\":[-3,32,0]}]}");
+		var warnings = Morphs.attachWarnings(horns);
+		if (warnings.size() != 1 || !warnings.getFirst().contains("attach head")) throw new AssertionError("unattached horns should be flagged: " + warnings);
 	}
 
 	@Override
@@ -47,6 +65,7 @@ public class CustomMorphsClientTest implements FabricClientGameTest {
 		try (TestSingleplayerContext sp = ctx.worldBuilder().create()) {
 			sp.getConnection().waitForChunksRender();
 			sp.getServer().runOnServer(server -> {
+				checkRules();
 				define(server, BELLY);
 				define(server, spider());
 				define(server, FIST);
@@ -62,7 +81,13 @@ public class CustomMorphsClientTest implements FabricClientGameTest {
 			ctx.runOnClient(mc -> mc.player.yBodyRot = mc.player.yBodyRotO = mc.player.getYRot());
 			ctx.waitTicks(20);
 			ctx.takeScreenshot("claudecraft-morph-belly");
-			sp.getServer().runOnServer(server -> server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), "claude morph spider @a"));
+			sp.getServer().runOnServer(server -> {
+				var src = server.createCommandSourceStack();
+				server.getCommands().performPrefixedCommand(src, "claude morph spider @a");
+				// Morphed players show no armor: it would float where the vanilla body was.
+				server.getCommands().performPrefixedCommand(src, "item replace entity @a armor.head with minecraft:diamond_helmet");
+				server.getCommands().performPrefixedCommand(src, "item replace entity @a armor.chest with minecraft:diamond_chestplate");
+			});
 			ctx.runOnClient(mc -> mc.player.yBodyRot = mc.player.yBodyRotO = mc.player.getYRot());
 			ctx.waitTicks(20);
 			ctx.takeScreenshot("claudecraft-morph-spider");
