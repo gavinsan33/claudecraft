@@ -13,7 +13,10 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** The first-person hand follows the local player's morph: no vanilla arm if the morph hides it, plus parts attached to it. */
+/**
+ * Morphed players: the first-person hand follows the morph (no vanilla arm if the morph hides it, plus parts attached
+ * to it), and armor isn't drawn on them.
+ */
 @Mixin(AvatarRenderer.class)
 abstract class AvatarRendererMixin {
 	@Inject(method = "renderHand", at = @At("HEAD"), cancellable = true)
@@ -32,6 +35,11 @@ abstract class AvatarRendererMixin {
 	private void claudecraft$armParts(PoseStack pose, SubmitNodeCollector collector, int light, Identifier skin, ModelPart arm, boolean sleeve, CallbackInfo ci) {
 		PlayerModel model = claudecraft$model();
 		MorphLayer.firstPersonParts(pose, collector, light, skin, model, MorphLayer.armName(model, arm), sleeve);
+	}
+
+	@Inject(method = "extractRenderState(Lnet/minecraft/world/entity/Avatar;Lnet/minecraft/client/renderer/entity/state/AvatarRenderState;F)V", at = @At("TAIL"))
+	private void claudecraft$morphStripsArmor(net.minecraft.world.entity.Avatar player, net.minecraft.client.renderer.entity.state.AvatarRenderState state, float partialTick, CallbackInfo ci) {
+		MorphLayer.stripEquipment(player, state);
 	}
 
 	@Unique

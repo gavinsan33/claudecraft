@@ -180,6 +180,16 @@ public final class MorphLayer extends RenderLayer<AvatarRenderState, PlayerModel
 		return arm == model.rightArm ? "right_arm" : "left_arm";
 	}
 
+	/** Morphed players wear no visible armor, head items, elytra, cape or wearables: they'd sit where the vanilla body was. */
+	public static void stripEquipment(net.minecraft.world.entity.Entity player, AvatarRenderState s) {
+		if (Morphs.of(player) == null) return;
+		s.headEquipment = s.chestEquipment = s.legsEquipment = s.feetEquipment = net.minecraft.world.item.ItemStack.EMPTY;
+		s.headItem.clear();
+		s.wornHeadType = null;
+		s.wornHeadProfile = null;
+		s.showCape = false;
+	}
+
 	/** First person: whether the local player's morph hides this arm, so the vanilla hand shouldn't be drawn. */
 	public static boolean firstPersonArmHidden(String arm) {
 		var player = Minecraft.getInstance().player;
