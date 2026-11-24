@@ -134,6 +134,84 @@ public final class Morphs {
 		return bad == null ? null : "armor.worn: " + bad;
 	}
 
+	/** Where a part shows: both (default), first_person (only as the hand you see) or third_person (only on your body). */
+	public static final List<String> VIEWS = List.of("both", "first_person", "third_person");
+
+	public static String view(JsonObject part) {
+		return part.has("view") ? part.get("view").getAsString() : "both";
+	}
+
+	/**
+	 * Parts that look stuck onto a visible body part but won't move with it: not attached to it (or attached to another
+	 * one), so they'd stay put while that limb swings or the head turns. Returned as advice for Claude; empty if all's well.
+	 */
+	static List<String> attachWarnings(JsonObject def) {
+		List<String> out = new java.util.ArrayList<>();
+		List<String> hidden = hidden(def);
+		int i = 0;
+		for (JsonElement e : def.getAsJsonArray("parts")) {
+			i++;
+			JsonObject p = e.getAsJsonObject();
+			if (view(p).equals("first_person")) continue;
+			float[] lo = new float[3], hi = new float[3];
+			if (p.has("skin")) {
+				Region r = REGIONS.get(p.get("skin").getAsString());
+				float[] c = vec(p, "center", new float[]{r.cx(), r.cy(), r.cz()}), s = vec(p, "scale", new float[]{1, 1, 1});
+				float[] half = {r.w() * s[0] / 2, r.h() * s[1] / 2, r.d() * s[2] / 2};
+				for (int k = 0; k < 3; k++) {
+					lo[k] = c[k] - half[k];
+					hi[k] = c[k] + half[k];
+				}
+			} else {
+				float[] o = vec(p, "origin", new float[3]);
+				JsonArray layers = p.getAsJsonArray("layers");
+				int sx = 0, sz = 0;
+				for (JsonElement l : layers) {
+					sz = Math.max(sz, l.getAsJsonArray().size());
+					for (JsonElement row : l.getAsJsonArray()) sx = Math.max(sx, row.getAsString().codePointCount(0, row.getAsString().length()));
+				}
+				lo = o.clone();
+				hi = new float[]{o[0] + sx, o[1] + layers.size(), o[2] + sz};
+			}
+			String attach = p.has("attach") ? p.get("attach").getAsString() : null;
+			if (attach != null && overlap(REGIONS.get(attach), lo, hi) > 0) continue; // on what it's attached to (even a hidden one)
+			// The visible body part it overlaps most, counting two voxels around it, for clothes and things resting on it.
+			String best = null;
+			float bestVol = 0;
+			for (var r : REGIONS.entrySet()) {
+				if (hidden.contains(r.getKey())) continue;
+				float vol = overlap(r.getValue(), lo, hi);
+				if (vol > bestVol) {
+					bestVol = vol;
+					best = r.getKey();
+				}
+			}
+			if (best == null) continue;
+			String role = p.has("role") ? p.get("role").getAsString() : "none";
+			if (attach == null && (role.equals("none") || role.equals("body"))) {
+				out.add("part " + i + " sits on the " + best.replace('_', ' ') + " but isn't attached, so it won't move with it: add attach " + best);
+			} else if (attach != null && !attach.equals(best)) {
+				out.add("part " + i + " is attached to the " + attach.replace('_', ' ') + " but sits on the " + best.replace('_', ' ')
+					+ "; attach it to " + best + " unless it really should move with the " + attach.replace('_', ' '));
+			}
+		}
+		return out;
+	}
+
+	/** How much a box overlaps a body part, counting two voxels around the part. */
+	private static float overlap(Region g, float[] lo, float[] hi) {
+		float vol = 1;
+		float[] gc = {g.cx(), g.cy(), g.cz()}, gh = {g.w() / 2f + 2, g.h() / 2f + 2, g.d() / 2f + 2};
+		for (int k = 0; k < 3; k++) vol *= Math.max(0, Math.min(hi[k], gc[k] + gh[k]) - Math.max(lo[k], gc[k] - gh[k]));
+		return vol;
+	}
+
+	private static float[] vec(JsonObject p, String key, float[] dflt) {
+		if (!p.has(key) || !p.get(key).isJsonArray()) return dflt;
+		JsonArray a = p.getAsJsonArray(key);
+		return new float[]{a.get(0).getAsFloat(), a.get(1).getAsFloat(), a.get(2).getAsFloat()};
+	}
+
 	/** Check a morph definition, returning a problem or null. */
 	static String validate(JsonObject def) {
 		for (String h : hidden(def)) if (!REGIONS.containsKey(h)) return "hide: " + h + " isn't one of all, " + String.join(", ", REGIONS.keySet());

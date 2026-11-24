@@ -1888,7 +1888,8 @@ public class GameTools implements McpServer.Tools {
 		checkRecipes(def);
 		CustomItems.define(server, def);
 		return (old != null ? "Updated" : "Defined") + " custom item " + id + " (" + parsed.sx + "x" + parsed.sy + "x" + parsed.sz
-			+ " voxels). Hand it out with give_item, or check it with view_item." + recipeNote(def);
+			+ " voxels). Hand it out with give_item, or check it with view_item." + recipeNote(def)
+			+ (Morphs.worn(def, false) != null ? " Check the fit with view_item worn: true." + attachAdvice(Morphs.attachWarnings(Morphs.worn(def, false))) : "");
 	}
 
 	private String defineBlock(JsonObject args) throws ToolError {
@@ -2108,7 +2109,12 @@ public class GameTools implements McpServer.Tools {
 		if (bad != null) throw new ToolError(bad);
 		CustomItems.define(server, def);
 		return (old != null ? "Updated" : "Defined") + " morph " + id + ". Apply it with run_commands: claude morph " + id
-			+ " [players] (claude unmorph to undo). Pictures can't show morphs, so ask the player how it looks.";
+			+ " [players] (claude unmorph to undo). Pictures can't show morphs, so ask the player how it looks." + attachAdvice(Morphs.attachWarnings(def));
+	}
+
+	/** Movement problems worth fixing, as a sentence for a tool result; empty if there are none. */
+	private static String attachAdvice(List<String> warnings) {
+		return warnings.isEmpty() ? "" : " Check how it moves: " + String.join("; ", warnings) + ".";
 	}
 
 	private String playEffect(JsonObject args) throws ToolError {
