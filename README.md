@@ -28,7 +28,7 @@ Ask for something that doesn't exist and Claude designs it on the spot and adds 
 
 Not quite right? Ask for changes ("make it bigger", "give it spots") and the new look shows up everywhere, even on copies already in the world.
 
-- **Effects.** "Make a lightning gun" or "a black hole gun." Glowing laser beams, crackling lightning, energy waves, orbs with halos and spinning rings, shockwaves and sparks, drawn for real. A black hole can actually pull mobs in. "Summon a tornado" gets real particles too: swirling dust and flying debris that move however Claude designs them.
+- **Effects.** "Make a lightning gun" or "a black hole gun." Glowing laser beams, crackling lightning, energy waves, orbs with halos and spinning rings, shockwaves and sparks, drawn for real, plus real particles (smoke, dust, fire, debris, magic) that move however Claude designs them. Effects can follow a player or mob, and a black hole can actually pull mobs in.
 
 - **Dimensions.** "Make a moon I can visit." Whole new worlds, created instantly: alien hills under a purple sky, floating islands among the stars, endless caverns. Claude shapes the land, can build it from blocks it invented, fills it with its creatures, and can make portals that work like nether portals to get there and back.
 

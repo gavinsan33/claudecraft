@@ -47,7 +47,7 @@ public final class CustomParticles {
 	public static final class Spec {
 		/** A particle sprite name (minecraft:big_smoke) or block:<block id>. */
 		public final String texture;
-		public final boolean randomFrame, emissive, collide;
+		public final boolean randomFrame, emissive, collide, trail;
 		private final int[] colors;
 		private final float[] sizes;
 		private final double lifeMin, lifeMax, gravity, dragPerTick, spin;
@@ -69,6 +69,7 @@ public final class CustomParticles {
 			randomFrame = d.has("frames") && d.get("frames").getAsString().equals("random");
 			emissive = d.has("emissive") && d.get("emissive").getAsBoolean();
 			collide = d.has("collide") && d.get("collide").getAsBoolean();
+			trail = d.has("trail") && d.get("trail").getAsBoolean();
 			JsonArray cs = list(d, d.has("colors") ? "colors" : "color", "#FFFFFF");
 			colors = new int[cs.size()];
 			for (int k = 0; k < colors.length; k++) colors[k] = VoxelModel.color(cs.get(k).getAsString());

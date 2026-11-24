@@ -29,20 +29,25 @@ import java.util.concurrent.ThreadLocalRandom;
  */
 final class CustomParticle extends SingleQuadParticle {
 	private final CustomParticles.Spec spec;
-	private final double ox, oy, oz;
+	/** Where the part played from. It moves with anchor (an effect following someone), carrying the particle along. */
+	private double ox, oy, oz;
+	private final Entity anchor;
+	private final Vec3 anchorOffset;
 	private final double[] v, vel, d = new double[3];
 	private final int born;
 	private final List<TextureAtlasSprite> frames;
 	private final boolean blockChip;
 	private final float spinPerTick, uo, vo;
 
-	private CustomParticle(ClientLevel level, CustomParticles.Spec spec, Vec3 origin, List<TextureAtlasSprite> frames, double[] v, double[] vel, int lifetime, int born) {
+	private CustomParticle(ClientLevel level, CustomParticles.Spec spec, Vec3 origin, Entity anchor, List<TextureAtlasSprite> frames, double[] v, double[] vel, int lifetime, int born) {
 		super(level, origin.x + v[CustomParticles.X], origin.y + v[CustomParticles.Y], origin.z + v[CustomParticles.Z], frames.getFirst());
 		ThreadLocalRandom rnd = ThreadLocalRandom.current();
 		this.spec = spec;
 		this.ox = origin.x;
 		this.oy = origin.y;
 		this.oz = origin.z;
+		this.anchor = anchor;
+		this.anchorOffset = anchor == null ? null : origin.subtract(anchor.position());
 		this.v = v;
 		this.vel = vel;
 		this.born = born;
@@ -70,6 +75,16 @@ final class CustomParticle extends SingleQuadParticle {
 			return;
 		}
 		float life = age / (float) lifetime;
+		if (anchor != null) {
+			Vec3 o = anchor.position().add(anchorOffset);
+			double dx = o.x - ox, dy = o.y - oy, dz = o.z - oz;
+			if (dx != 0 || dy != 0 || dz != 0) {
+				setPos(x + dx, y + dy, z + dz);
+				ox = o.x;
+				oy = o.y;
+				oz = o.z;
+			}
+		}
 		v[CustomParticles.X] = x - ox;
 		v[CustomParticles.Y] = y - oy;
 		v[CustomParticles.Z] = z - oz;
@@ -132,16 +147,19 @@ final class CustomParticle extends SingleQuadParticle {
 		if (mc.level == null || mc.isPaused()) return;
 		for (Entity e : mc.level.entitiesForRendering()) {
 			if (e instanceof Effects.EffectEntity fx) {
-				emit(mc, fx.effectId(), fx.position(), fx.to(), fx.tickCount - 1, false);
+				emit(mc, fx.effectId(), fx, fx.position(), fx.to(), fx.tickCount - 1, false);
 			} else if (e instanceof CustomProjectiles.Thrown t && !t.trail().isEmpty()) {
 				Vec3 back = t.getDeltaMovement().scale(-3);
-				emit(mc, t.trail(), t.position(), new org.joml.Vector3f((float) back.x, (float) back.y, (float) back.z), t.tickCount - 1, true);
+				emit(mc, t.trail(), null, t.position(), new org.joml.Vector3f((float) back.x, (float) back.y, (float) back.z), t.tickCount - 1, true);
 			}
 		}
 	}
 
-	/** One effect's particles parts at effect time `tick`. to: its end point relative to the start. */
-	private static void emit(Minecraft mc, String id, Vec3 start, Vector3fc to, int tick, boolean loop) {
+	/**
+	 * One effect's particles parts at effect time `tick`. to: its end point relative to the start. anchor: the
+	 * effect's entity, whose movement (when it follows someone) carries particles along unless the part is a trail.
+	 */
+	private static void emit(Minecraft mc, String id, Entity anchor, Vec3 start, Vector3fc to, int tick, boolean loop) {
 		JsonObject def = CustomItems.DEFS.get(id);
 		if (!Effects.isEffect(def) || tick < 0) return;
 		int life = Effects.durationTicks(def), i = 0;
@@ -168,7 +186,7 @@ final class CustomParticle extends SingleQuadParticle {
 				double[] v = new double[CustomParticles.VARS.size()], vel = new double[3];
 				int lifetime = spec.spawn(v, vel, k, n, tick, rnd);
 				// Added straight to the engine, so they aren't culled at 32 blocks like vanilla's.
-				mc.particleEngine.add(new CustomParticle(mc.level, spec, origin, frames, v, vel, lifetime, tick));
+				mc.particleEngine.add(new CustomParticle(mc.level, spec, origin, spec.trail ? null : anchor, frames, v, vel, lifetime, tick));
 			}
 		}
 	}

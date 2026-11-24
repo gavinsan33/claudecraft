@@ -122,9 +122,19 @@ public final class Effects {
 
 	/** Play an effect from one point toward another (the same point for orbs and bursts). Server thread. */
 	static EffectEntity play(ServerLevel level, JsonObject def, Vec3 from, Vec3 to, Entity owner) {
+		return play(level, def, from, to, owner, null);
+	}
+
+	/** Play an effect; with follow, it keeps its offset from that entity as it moves, and ends if the entity dies. */
+	static EffectEntity play(ServerLevel level, JsonObject def, Vec3 from, Vec3 to, Entity owner, Entity follow) {
 		EffectEntity e = new EffectEntity(TYPE, level);
 		e.setPos(from);
 		e.setEffect(def.get("id").getAsString(), to.subtract(from), level.getRandom().nextInt());
+		if (follow != null) {
+			Vec3 off = from.subtract(follow.position());
+			e.getEntityData().set(EffectEntity.FOLLOW, follow.getId());
+			e.getEntityData().set(EffectEntity.OFFSET, new Vector3f((float) off.x, (float) off.y, (float) off.z));
+		}
 		if (owner != null) e.owner = owner.getUUID();
 		level.addFreshEntity(e);
 		if (def.has("sound")) {
@@ -140,6 +150,9 @@ public final class Effects {
 		private static final EntityDataAccessor<String> EFFECT = SynchedEntityData.defineId(EffectEntity.class, EntityDataSerializers.STRING);
 		private static final EntityDataAccessor<Vector3fc> TO = SynchedEntityData.defineId(EffectEntity.class, EntityDataSerializers.VECTOR3);
 		private static final EntityDataAccessor<Integer> SEED = SynchedEntityData.defineId(EffectEntity.class, EntityDataSerializers.INT);
+		/** The network id of the entity it follows, or -1, and its offset from that entity's feet. */
+		static final EntityDataAccessor<Integer> FOLLOW = SynchedEntityData.defineId(EffectEntity.class, EntityDataSerializers.INT);
+		static final EntityDataAccessor<Vector3fc> OFFSET = SynchedEntityData.defineId(EffectEntity.class, EntityDataSerializers.VECTOR3);
 		UUID owner;
 
 		EffectEntity(EntityType<? extends EffectEntity> type, Level level) {
@@ -153,6 +166,8 @@ public final class Effects {
 			b.define(EFFECT, "");
 			b.define(TO, new Vector3f());
 			b.define(SEED, 0);
+			b.define(FOLLOW, -1);
+			b.define(OFFSET, new Vector3f());
 		}
 
 		void setEffect(String id, Vec3 to, int seed) {
@@ -184,6 +199,18 @@ public final class Effects {
 		@Override
 		public void tick() {
 			super.tick();
+			int follow = entityData.get(FOLLOW);
+			if (follow >= 0) {
+				// Both sides move it every tick, so it's smooth for players rather than waiting on position packets.
+				Entity target = level().getEntity(follow);
+				if (target != null && target.isAlive()) {
+					Vector3fc off = entityData.get(OFFSET);
+					setPos(target.position().add(off.x(), off.y(), off.z()));
+				} else if (!level().isClientSide()) {
+					discard();
+					return;
+				}
+			}
 			if (!(level() instanceof ServerLevel level)) return;
 			JsonObject def = definition();
 			if (def == null || tickCount >= durationTicks(def)) {
