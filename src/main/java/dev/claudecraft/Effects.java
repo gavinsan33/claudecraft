@@ -231,6 +231,11 @@ public final class Effects {
 		}
 
 		@Override
+		public boolean shouldRenderAtSqrDistance(double distance) {
+			return true; // vanilla hides entities this small past about 16 blocks; effects are meant to be seen from afar
+		}
+
+		@Override
 		public boolean shouldBeSaved() {
 			return false;
 		}

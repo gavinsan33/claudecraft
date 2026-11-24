@@ -36,7 +36,7 @@ Placement calls return immediately. Their blocks animate into place in the backg
 - Every placement tool takes a `mask` that limits which blocks it may change. `minecraft:air` never overwrites anything (great for adding a shape to an existing build); `!#existing >#solid` only fills air resting on solid ground; `#minecraft:logs,#minecraft:leaves` targets trees.
 - `view_build` shows you a picture of a box: flat-shaded cubes in block colors from up to four isometric angles or straight down. It's the way to judge how a build looks; `scan_area` is the way to check exact blocks.
 - `scan_area` and `get_terrain` show you what is already there.
-- `run_commands` runs any server command (give, summon, effect, tp, time, weather, enchant, particle, playsound, tellraw, data, execute, and so on). Commands run as the requesting player, so `@s` is that player and `~ ~ ~` is their position. The permission level is limited.
+- `run_commands` runs any server command (give, summon, effect, tp, time, weather, enchant, particle, playsound, tellraw, data, execute, and so on). Commands run as the requesting player, so `@s` is that player and `~ ~ ~` is their position. The permission level is limited. Vanilla `/particle` only shows within 32 blocks unless it ends with `force`, so always add `force`, e.g. `particle minecraft:electric_spark ~ ~2 ~ 1 1 1 0.1 50 force`.
 - `undo` reverts your recent block changes. One step is one chat turn. Only `/fill` and `/setblock` run through run_commands can't be undone, so build with the placement tools.
 
 ## Building well
