@@ -43,7 +43,7 @@ public final class Effects {
 	private Effects() {}
 
 	public static EntityType<EffectEntity> TYPE;
-	public static final List<String> PART_TYPES = List.of("beam", "orb", "ring", "sparks");
+	public static final List<String> PART_TYPES = List.of("beam", "orb", "ring", "sparks", "particles");
 	public static final List<String> BEAM_STYLES = List.of("straight", "lightning", "wave", "spiral");
 	public static final List<String> PLACES = List.of("start", "end", "along");
 	static final int MAX_SECONDS = 600;
@@ -86,10 +86,33 @@ public final class Effects {
 					return "part " + i + ": " + c + " must be #RRGGBB or #AARRGGBB";
 				}
 			}
-			if (p.has("count") && p.get("count").getAsInt() > 400) return "part " + i + ": at most 400 sparks";
+			if (type.equals("sparks") && p.has("count") && p.get("count").getAsInt() > 400) return "part " + i + ": at most 400 sparks";
+			if (type.equals("particles")) {
+				try {
+					new CustomParticles.Spec(p);
+				} catch (RuntimeException ex) {
+					return "part " + i + " (particles): " + ex.getMessage();
+				}
+			}
 		}
 		if (def.has("sound") && sound(def.get("sound").getAsString()) == null) return "Unknown sound " + def.get("sound").getAsString();
 		return null;
+	}
+
+	/** A dry run of each particles part, for Claude, who can't see them; empty if there are none. */
+	static String particleSummary(JsonObject def) {
+		StringBuilder sb = new StringBuilder();
+		int i = 0;
+		for (JsonElement e : def.getAsJsonArray("parts")) {
+			i++;
+			JsonObject p = e.getAsJsonObject();
+			if (!p.get("type").getAsString().equals("particles")) continue;
+			int start = (int) Math.round((p.has("start_seconds") ? p.get("start_seconds").getAsDouble() : 0) * 20);
+			int end = p.has("end_seconds") ? (int) Math.round(p.get("end_seconds").getAsDouble() * 20) : durationTicks(def);
+			sb.append(" Part ").append(i).append(" dry run: ")
+				.append(new CustomParticles.Spec(p).summary(Math.max(1, end - start), java.util.concurrent.ThreadLocalRandom.current())).append('.');
+		}
+		return sb.toString();
 	}
 
 	static SoundEvent sound(String name) {
@@ -228,6 +251,11 @@ public final class Effects {
 		@Override
 		public boolean isIgnoringBlockTriggers() {
 			return true;
+		}
+
+		@Override
+		public boolean shouldRenderAtSqrDistance(double distance) {
+			return true; // vanilla hides entities this small past about 16 blocks; effects are meant to be seen from afar
 		}
 
 		@Override

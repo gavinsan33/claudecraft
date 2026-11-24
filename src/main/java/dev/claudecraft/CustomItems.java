@@ -240,6 +240,7 @@ public final class CustomItems {
 		TEMPLATES.clear();
 		CustomBlocks.definitionsChanged();
 		CustomEntities.definitionsChanged();
+		CustomParticles.definitionsChanged();
 	}
 
 	private static DefinitionsPayload payload(Collection<JsonObject> defs, boolean replaceAll, List<String> removed) {

@@ -89,6 +89,7 @@ public class ClaudeCraftClient implements ClientModInitializer {
 		EntityRendererRegistry.register(CustomEntities.TYPE, CustomEntityRenderer::new);
 		EntityRendererRegistry.register(dev.claudecraft.CustomProjectiles.TYPE, ThrownRenderer::new);
 		EntityRendererRegistry.register(dev.claudecraft.Effects.TYPE, EffectRenderer::new);
+		net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents.END_CLIENT_TICK.register(CustomParticle::tick);
 		AnimatedBlocks.register();
 		OwnClaude.register();
 		ClaudeCraftScreen.register();
