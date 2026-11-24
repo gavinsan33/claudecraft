@@ -110,6 +110,8 @@ final class Portals {
 	 * portal's plane) to a safe spot near the same x and z in `dest`, standing two blocks in front of where the
 	 * traveller arrives.
 	 */
+	// TODO: portals built here (not ones players place) should break like vanilla nether portals: breaking any frame
+	// block or any one pane removes every pane of that portal. Their panes should be pane-sized, not full blocks.
 	static Arrival build(ServerLevel src, int variant, BlockPos entry, ServerLevel dest) {
 		Set<BlockPos> portal = connected(src, variant, entry);
 		int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, minZ = Integer.MAX_VALUE;
