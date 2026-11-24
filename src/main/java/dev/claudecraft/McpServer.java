@@ -25,12 +25,20 @@ import java.util.concurrent.Executors;
 public class McpServer {
 	private static final Gson GSON = new Gson();
 
-	private final GameTools tools;
+	/** What the endpoint serves: the game's tools, or (on a player's own client) tools forwarded to the host. */
+	public interface Tools {
+		JsonArray listTools();
+
+		/** @param session which concurrent Claude session is calling (the number at the end of its URL) */
+		JsonObject call(int session, String name, JsonObject args);
+	}
+
+	private final Tools tools;
 	private final String secret;
 	private HttpServer http;
 	private ExecutorService pool;
 
-	public McpServer(GameTools tools) {
+	public McpServer(Tools tools) {
 		this.tools = tools;
 		byte[] b = new byte[24];
 		new SecureRandom().nextBytes(b);
@@ -55,13 +63,27 @@ public class McpServer {
 		if (pool != null) pool.shutdownNow();
 	}
 
-	public String url() {
-		return "http://127.0.0.1:" + http.getAddress().getPort() + "/mcp/" + secret;
+	/** The endpoint for one Claude session; the session number in the path tells tool calls apart. */
+	public String url(int session) {
+		return "http://127.0.0.1:" + http.getAddress().getPort() + "/mcp/" + secret + "/" + session;
+	}
+
+	/** The session number from a request path, or -1 if the path is wrong. */
+	private int sessionOf(String path) {
+		String prefix = "/mcp/" + secret;
+		if (path.equals(prefix)) return 0;
+		if (!path.startsWith(prefix + "/")) return -1;
+		try {
+			return Math.max(-1, Integer.parseInt(path.substring(prefix.length() + 1)));
+		} catch (NumberFormatException e) {
+			return -1;
+		}
 	}
 
 	private void handle(HttpExchange ex) throws IOException {
 		try (ex) {
-			if (!ex.getRequestURI().getPath().equals("/mcp/" + secret)) {
+			int session = sessionOf(ex.getRequestURI().getPath());
+			if (session < 0) {
 				send(ex, 404, null);
 				return;
 			}
@@ -73,12 +95,12 @@ public class McpServer {
 					if (in.isJsonArray()) {
 						JsonArray responses = new JsonArray();
 						for (JsonElement msg : in.getAsJsonArray()) {
-							JsonObject r = dispatch(msg.getAsJsonObject());
+							JsonObject r = dispatch(session, msg.getAsJsonObject());
 							if (r != null) responses.add(r);
 						}
 						out = responses.isEmpty() ? null : responses;
 					} else {
-						out = dispatch(in.getAsJsonObject());
+						out = dispatch(session, in.getAsJsonObject());
 					}
 					if (out == null) send(ex, 202, null);
 					else send(ex, 200, GSON.toJson(out));
@@ -106,7 +128,7 @@ public class McpServer {
 	}
 
 	/** Returns the JSON-RPC response, or null for notifications. */
-	private JsonObject dispatch(JsonObject msg) {
+	private JsonObject dispatch(int session, JsonObject msg) {
 		if (!msg.has("method")) return null; // a response to us; we never send requests
 		JsonElement id = msg.get("id");
 		if (id == null || id.isJsonNull()) return null; // notification
@@ -141,7 +163,7 @@ public class McpServer {
 				String name = params.get("name").getAsString();
 				JsonObject args = params.has("arguments") && params.get("arguments").isJsonObject()
 					? params.getAsJsonObject("arguments") : new JsonObject();
-				resp.add("result", tools.call(name, args));
+				resp.add("result", tools.call(session, name, args));
 			}
 			default -> {
 				JsonObject err = new JsonObject();

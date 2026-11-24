@@ -90,6 +90,8 @@ public class ClaudeCraftClient implements ClientModInitializer {
 		EntityRendererRegistry.register(dev.claudecraft.CustomProjectiles.TYPE, ThrownRenderer::new);
 		EntityRendererRegistry.register(dev.claudecraft.Effects.TYPE, EffectRenderer::new);
 		AnimatedBlocks.register();
+		OwnClaude.register();
+		ClaudeCraftScreen.register();
 		CustomItems.onClientChange = blocks -> {
 			MESHES.clear();
 			BLOCK_MESHES.clear();

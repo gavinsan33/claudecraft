@@ -26,9 +26,10 @@ public class BuildQueue {
 	/**
 	 * @param seconds how long the animation should take; 0 or less uses the configured pacing
 	 * @param onFinish gets the result before the returned future (or {@link #idle()}) completes, may be null
+	 * @param undo records what gets overwritten, may be null
 	 * @param mask only place blocks where this holds at placement time, may be null
 	 */
-	public CompletableFuture<String> enqueue(ServerLevel level, Map<BlockPos, BlockState> changes, UndoHistory undo, double seconds,
+	public CompletableFuture<String> enqueue(ServerLevel level, Map<BlockPos, BlockState> changes, UndoHistory.Recorder undo, double seconds,
 			java.util.function.Consumer<String> onFinish, java.util.function.Predicate<BlockPos> mask) {
 		double perTick;
 		if (!cfg.animateBuilds) {
