@@ -12,6 +12,10 @@ public class CustomMorphsClientTest implements FabricClientGameTest {
 		{"id":"big_belly","name":"Big Belly","parts":[
 		 {"skin":"body","center":[0,14,4],"scale":[1.4,0.75,3],"attach":"body"}]}""";
 
+	private static final String FIST = """
+		{"id":"big_fist","name":"Big Fist","hide":["right_arm"],"parts":[
+		 {"skin":"right_arm","center":[-6.5,16,0],"pivot":[-6,22,0],"scale":[1.8,1.3,1.8],"attach":"right_arm"}]}""";
+
 	/** Legs splay out from the body's sides, alternating phases so it scuttles. */
 	private static String spider() {
 		StringBuilder legs = new StringBuilder();
@@ -45,6 +49,7 @@ public class CustomMorphsClientTest implements FabricClientGameTest {
 			sp.getServer().runOnServer(server -> {
 				define(server, BELLY);
 				define(server, spider());
+				define(server, FIST);
 				var src = server.createCommandSourceStack();
 				int y = server.overworld().getChunk(0, 0).getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING, 0, 0) + 1;
 				server.getCommands().performPrefixedCommand(src, "tp @a 0.5 " + y + " 0.5 200 10");
@@ -63,6 +68,14 @@ public class CustomMorphsClientTest implements FabricClientGameTest {
 			ctx.takeScreenshot("claudecraft-morph-spider");
 			boolean morphed = sp.getServer().computeOnServer(server -> "spider".equals(server.getPlayerList().getPlayers().getFirst().getAttached(Morphs.MORPH)));
 			if (!morphed) throw new AssertionError("player should wear the spider morph");
+			// First person: the spider has no hand; the big fist shows its own oversized arm instead of the vanilla one.
+			ctx.runOnClient(mc -> mc.options.setCameraType(net.minecraft.client.CameraType.FIRST_PERSON));
+			ctx.waitTicks(5);
+			ctx.takeScreenshot("claudecraft-morph-spider-hand");
+			sp.getServer().runOnServer(server -> server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), "claude morph big_fist @a"));
+			ctx.waitTicks(10);
+			ctx.takeScreenshot("claudecraft-morph-fist-hand");
+			ctx.runOnClient(mc -> mc.options.setCameraType(net.minecraft.client.CameraType.THIRD_PERSON_FRONT));
 			sp.getServer().runOnServer(server -> server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), "claude unmorph @a"));
 			ctx.waitTicks(5);
 			ctx.takeScreenshot("claudecraft-morph-none");
