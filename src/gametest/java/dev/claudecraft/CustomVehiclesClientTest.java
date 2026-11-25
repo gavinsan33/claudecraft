@@ -47,7 +47,7 @@ public class CustomVehiclesClientTest implements FabricClientGameTest {
 	private static double[] pos(ClientGameTestContext ctx) {
 		return ctx.computeOnClient(mc -> {
 			var v = mc.player.getVehicle();
-			return v == null ? null : new double[]{v.getX(), v.getY(), v.getZ(), ((CustomEntities.CustomEntity) v).roll};
+			return v == null ? null : new double[]{v.getX(), v.getY(), v.getZ(), ((CustomEntities.CustomEntity) v).roll, v.getYRot()};
 		});
 	}
 
@@ -63,7 +63,7 @@ public class CustomVehiclesClientTest implements FabricClientGameTest {
 					{"id":"rocket_flames","name":"Rocket flames","kind":"effect","duration_seconds":0.3,"parts":[
 					 {"type":"particles","texture":"flame","emissive":true,"rate":120,"trail":true,"sizes":[0.5,0.1],"lifetime":[0.4,0.7],
 					  "spawn":{"x":"(r1-0.5)*0.4","z":"(r2-0.5)*0.4"},"velocity":{"y":"-6 - r3*3"}},
-					 {"type":"particles","texture":"big_smoke","rate":40,"trail":true,"colors":["#C0A0A0A0","#00606060"],"sizes":[0.8,2],"lifetime":[1,2],
+					 {"type":"particles","texture":"big_smoke","rate":40,"trail":true,"colors":["#A0A0A0","#606060"],"opacity":[0.75,0],"sizes":[0.8,2],"lifetime":[1,2],
 					  "velocity":{"x":"(r1-0.5)*2","y":"-2","z":"(r2-0.5)*2"}}]}""").getAsJsonObject();
 				if (Effects.validate(flames) != null) throw new AssertionError(Effects.validate(flames));
 				CustomItems.define(server, flames);
@@ -132,8 +132,11 @@ public class CustomVehiclesClientTest implements FabricClientGameTest {
 			double[] drove = pos(ctx);
 			ctx.takeScreenshot("claudecraft-car");
 			ctx.getInput().releaseKey(o -> o.keyUp);
-			if (drove[2] - park[2] < 4) throw new AssertionError("holding W should drive forward (+z): " + park[2] + " -> " + drove[2]);
-			if (Math.abs(drove[0] - park[0]) > 1) throw new AssertionError("without A/D it should drive straight: x " + park[0] + " -> " + drove[0]);
+			// Along the way the car faces (it spawns facing anywhere): forward, and straight without A/D.
+			double yaw = Math.toRadians(park[4]), dx = drove[0] - park[0], dz = drove[2] - park[2];
+			double ahead = -dx * Math.sin(yaw) + dz * Math.cos(yaw), aside = dx * Math.cos(yaw) + dz * Math.sin(yaw);
+			if (ahead < 4) throw new AssertionError("holding W should drive forward: " + ahead + " blocks ahead");
+			if (Math.abs(aside) > 1) throw new AssertionError("without A/D it should drive straight, drifted " + aside);
 			if (Math.abs(drove[1] - park[1]) > 0.6) throw new AssertionError("the car should stay on the ground: " + park[1] + " -> " + drove[1]);
 		}
 	}
