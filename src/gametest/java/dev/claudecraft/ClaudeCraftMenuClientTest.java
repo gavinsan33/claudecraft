@@ -38,7 +38,20 @@ public class ClaudeCraftMenuClientTest implements FabricClientGameTest {
 				"the new limit is saved");
 			ctx.waitFor(mc -> button(mc, "Claude sessions at once").getMessage().getString().endsWith(": 3"), 100);
 			Config.saveSetting(cfgFile, "maxConcurrentSessions", new JsonPrimitive(2));
+
+			// Effort: one press moves default -> low, saved and used for the next turn.
+			check(press(ctx, "Claude's effort: default"), "the effort button starts at default");
+			sp.getServer().waitFor(s -> ClaudeCraft.bridge().effort().equals("low"), 100);
+			check(JsonParser.parseString(Files.readString(cfgFile)).getAsJsonObject().get("effort").getAsString().equals("low"), "the effort is saved");
 			ctx.setScreen(() -> null);
+			// And the command: anyone can see it, the host can change it.
+			sp.getServer().runOnServer(s -> {
+				var src = s.getPlayerList().getPlayers().getFirst().createCommandSourceStack();
+				s.getCommands().performPrefixedCommand(src, "claude effort xhigh");
+				s.getCommands().performPrefixedCommand(src, "claude effort nonsense");
+			});
+			check(sp.getServer().computeOnServer(s -> ClaudeCraft.bridge().effort()).equals("xhigh"), "/claude effort xhigh should set it, and nonsense shouldn't");
+			sp.getServer().runOnServer(s -> ClaudeCraft.bridge().setEffort("default"));
 		} catch (java.io.IOException e) {
 			throw new RuntimeException(e);
 		}
