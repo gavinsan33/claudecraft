@@ -771,6 +771,9 @@ public class ClaudeBridge {
 	// ---------------------------------------------------------------- helpers
 
 	private void say(Slot slot, String line) {
+		// Claude sees its earlier lines labelled in chat and starts writing the label itself; the game adds it.
+		line = line.replaceFirst("^\\s*\\[[^\\]]*Claude\\]:?\\s*", "");
+		if (line.isBlank()) return;
 		broadcast(slot.label().append(Component.literal(line).withStyle(ChatFormatting.WHITE)));
 	}
 
