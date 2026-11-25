@@ -89,6 +89,7 @@ public class ClaudeCraftClient implements ClientModInitializer {
 		EntityRendererRegistry.register(CustomEntities.TYPE, CustomEntityRenderer::new);
 		EntityRendererRegistry.register(dev.claudecraft.CustomProjectiles.TYPE, ThrownRenderer::new);
 		EntityRendererRegistry.register(dev.claudecraft.Effects.TYPE, EffectRenderer::new);
+		net.minecraft.client.gui.screens.MenuScreens.register(dev.claudecraft.StorageMenus.TYPE, StorageScreen::new);
 		net.fabricmc.fabric.api.client.rendering.v1.LivingEntityRenderLayerRegistrationCallback.EVENT.register((type, renderer, helper, ctx) -> {
 			if (renderer instanceof net.minecraft.client.renderer.entity.player.AvatarRenderer<?> avatar) {
 				@SuppressWarnings("unchecked")

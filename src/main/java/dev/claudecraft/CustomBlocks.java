@@ -568,10 +568,13 @@ public final class CustomBlocks {
 		protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player, BlockHitResult hit) {
 			JsonObject def = definition(state);
 			JsonObject p = props(def);
-			boolean storage = rows(def) > 0;
-			if (!p.has("use_commands") && !storage) return InteractionResult.PASS;
+			// Sneaking with an empty hand: sneak_use_commands, or storage that opens on sneak_use.
+			boolean sneak = player.isSecondaryUseActive();
+			boolean storage = slots(def) > 0 && StorageMenus.openOn(p, "use").equals(sneak ? "sneak_use" : "use");
+			String cmdKey = sneak && p.has("sneak_use_commands") ? "sneak_use_commands" : "use_commands";
+			if (!p.has(cmdKey) && !storage) return InteractionResult.PASS;
 			if (!level.isClientSide() && player instanceof ServerPlayer sp) {
-				CustomItems.runAsPlayer(sp, CustomItems.strings(p, "use_commands"), center(pos), null);
+				CustomItems.runAsPlayer(sp, CustomItems.strings(p, cmdKey), center(pos), null);
 				if (storage) {
 					Storage box = level.getBlockEntity(pos) instanceof Storage s ? s : null;
 					if (box == null) { // the definition gained storage after this block was placed
@@ -592,19 +595,19 @@ public final class CustomBlocks {
 
 		// -------------------------------------------------------- storage
 
-		static int rows(JsonObject def) {
-			JsonObject p = props(def);
-			return p.has("storage") ? Math.max(0, Math.min(6, p.get("storage").getAsInt())) : 0;
+		/** Storage slots: storage is {slots, open}, or a bare number of rows (9 slots each) in older definitions. */
+		static int slots(JsonObject def) {
+			return StorageMenus.slots(props(def), true);
 		}
 
 		@Override
 		public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {
-			return rows(definition(state)) > 0 ? new Storage(pos, state) : null;
+			return slots(definition(state)) > 0 ? new Storage(pos, state) : null;
 		}
 
 		@Override
 		protected boolean hasAnalogOutputSignal(BlockState state) {
-			return rows(definition(state)) > 0;
+			return slots(definition(state)) > 0;
 		}
 
 		@Override
@@ -783,16 +786,21 @@ public final class CustomBlocks {
 	}
 
 	/** The inventory of a storage block: a chest-style grid with the definition's number of rows. */
-	public static final class Storage extends BaseContainerBlockEntity {
+	public static final class Storage extends BaseContainerBlockEntity implements net.fabricmc.fabric.api.menu.v1.ExtendedMenuProvider<Integer> {
 		private NonNullList<ItemStack> items = NonNullList.withSize(54, ItemStack.EMPTY);
 
 		Storage(BlockPos pos, BlockState state) {
 			super(STORAGE, pos, state);
 		}
 
-		private int rows() {
-			int r = CustomBlock.rows(definition(getBlockState()));
-			return r > 0 ? r : 3;
+		private int slots() {
+			int n = CustomBlock.slots(definition(getBlockState()));
+			return n > 0 ? n : 27;
+		}
+
+		@Override
+		public Integer getScreenOpeningData(ServerPlayer player) {
+			return slots();
 		}
 
 		@Override
@@ -813,16 +821,7 @@ public final class CustomBlocks {
 
 		@Override
 		protected AbstractContainerMenu createMenu(int id, Inventory inventory) {
-			int rows = rows();
-			MenuType<?> type = switch (rows) {
-				case 1 -> MenuType.GENERIC_9x1;
-				case 2 -> MenuType.GENERIC_9x2;
-				case 4 -> MenuType.GENERIC_9x4;
-				case 5 -> MenuType.GENERIC_9x5;
-				case 6 -> MenuType.GENERIC_9x6;
-				default -> MenuType.GENERIC_9x3;
-			};
-			return new ChestMenu(type, id, inventory, this, rows);
+			return new StorageMenus.Menu(id, inventory, this, slots(), -1, p -> net.minecraft.world.Container.stillValidBlockEntity(this, p));
 		}
 
 		@Override
