@@ -1021,7 +1021,7 @@ public class GameTools implements McpServer.Tools {
 		return new BlockPos(o.get("x").getAsInt(), o.get("y").getAsInt(), o.get("z").getAsInt());
 	}
 
-	private static final class BlockParser {
+	static final class BlockParser {
 		private final HolderLookup<Block> lookup;
 		private final Map<String, BlockState> cache = new HashMap<>();
 

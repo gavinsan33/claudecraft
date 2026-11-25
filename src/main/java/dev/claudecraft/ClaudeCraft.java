@@ -60,6 +60,7 @@ public class ClaudeCraft implements ModInitializer {
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> shutdown());
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
 			if (builds != null) builds.tick();
+			WorldShapes.tick();
 			CreatureSpawning.tick(server);
 			OreGeneration.tick(server);
 			if (bridge != null) bridge.tick(builds);
@@ -98,6 +99,9 @@ public class ClaudeCraft implements ModInitializer {
 							p != null ? describeLocation(p) : null, true));
 						return 1;
 					})))
+				.then(Commands.literal("shape").requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
+					// claude shape <block> <forward> <side> <down> <up> <expression>: see WorldShapes.
+					.then(Commands.argument("spec", StringArgumentType.greedyString()).executes(ClaudeCraft::shape)))
 				.then(Commands.literal("effort")
 					// claude effort [low|medium|high|xhigh|max|default]: how hard Claude thinks, from its next turn on.
 					.executes(ctx -> {
@@ -290,6 +294,30 @@ public class ClaudeCraft implements ModInitializer {
 		}
 		for (ServerPlayer p : players) Morphs.set(p, id);
 		return players.size();
+	}
+
+	private static int shape(com.mojang.brigadier.context.CommandContext<net.minecraft.commands.CommandSourceStack> ctx) {
+		var src = ctx.getSource();
+		String[] t = StringArgumentType.getString(ctx, "spec").trim().split("\\s+", 6);
+		try {
+			if (t.length < 6) throw new IllegalArgumentException("Usage: claude shape <block> <forward> <side> <down> <up> <expression>");
+			int[] box = new int[4];
+			for (int i = 0; i < 4; i++) {
+				box[i] = Integer.parseInt(t[i + 1]);
+				if (box[i] < 0 || box[i] > WorldShapes.MAX_SIDE) throw new IllegalArgumentException("Sizes are 0 to " + WorldShapes.MAX_SIDE + " blocks");
+			}
+			var level = src.getLevel();
+			GameTools.Pattern block = new GameTools.BlockParser(level).pattern(t[0]);
+			Shapes.Expr expr = Shapes.parse(t[5], WorldShapes.VARS);
+			int n = WorldShapes.shape(level, src.getPosition(), src.getRotation().y, block, box[0], box[1], box[2], box[3], expr);
+			if (n < 0) throw new IllegalArgumentException("That shape changes more than " + WorldShapes.MAX_BLOCKS + " blocks; make it smaller");
+			int changed = n;
+			src.sendSuccess(() -> net.minecraft.network.chat.Component.literal("Shaping " + changed + " blocks"), false);
+			return Math.max(1, n);
+		} catch (GameTools.ToolError | IllegalArgumentException e) {
+			src.sendFailure(net.minecraft.network.chat.Component.literal(e.getMessage()));
+			return 0;
+		}
 	}
 
 	private static int visit(com.mojang.brigadier.context.CommandContext<net.minecraft.commands.CommandSourceStack> ctx,
