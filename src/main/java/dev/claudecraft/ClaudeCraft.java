@@ -88,6 +88,42 @@ public class ClaudeCraft implements ModInitializer {
 							p != null ? describeLocation(p) : null));
 						return 1;
 					})))
+				.then(Commands.literal("new")
+					// claude new <message>: run it in another session, alongside what Claude is already doing for you.
+					.then(Commands.argument("message", StringArgumentType.greedyString()).executes(ctx -> {
+						if (!ready(ctx) || !allowed(ctx)) return 0;
+						ServerPlayer p = ctx.getSource().getPlayer();
+						String name = p != null ? p.getScoreboardName() : "Server";
+						bridge.submit(new ClaudeBridge.Pending(name, StringArgumentType.getString(ctx, "message"),
+							p != null ? describeLocation(p) : null, true));
+						return 1;
+					})))
+				.then(Commands.literal("effort")
+					// claude effort [low|medium|high|xhigh|max|default]: how hard Claude thinks, from its next turn on.
+					.executes(ctx -> {
+						if (!ready(ctx)) return 0;
+						reply(ctx, "Claude's effort is " + bridge.effort() + ". Change it with /claude effort <low|medium|high|xhigh|max|default>.");
+						return 1;
+					})
+					.then(Commands.argument("level", StringArgumentType.word())
+						.suggests((c, b) -> net.minecraft.commands.SharedSuggestionProvider.suggest(
+							java.util.stream.Stream.concat(ClaudeBridge.EFFORTS.stream(), java.util.stream.Stream.of("default")), b))
+						.executes(ctx -> {
+							if (!ready(ctx)) return 0;
+							ServerPlayer p = ctx.getSource().getPlayer();
+							if (p != null && !bridge.canEditSettings(p)) {
+								ctx.getSource().sendFailure(Component.literal("Only the host or an operator can change Claude's effort."));
+								return 0;
+							}
+							String level = StringArgumentType.getString(ctx, "level").toLowerCase(java.util.Locale.ROOT);
+							if (!level.equals("default") && !ClaudeBridge.EFFORTS.contains(level)) {
+								ctx.getSource().sendFailure(Component.literal("Effort is one of low, medium, high, xhigh, max or default."));
+								return 0;
+							}
+							bridge.setEffort(level);
+							reply(ctx, "Claude's effort is now " + level + ", from its next turn on.");
+							return 1;
+						})))
 				.then(Commands.literal("stop").executes(ctx -> {
 					if (!ready(ctx) || !allowed(ctx)) return 0;
 					boolean wasBuilding = builds.isBusy();

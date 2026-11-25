@@ -663,7 +663,20 @@ public class ClaudeBridge {
 	// ---------------------------------------------------------------- settings menu (server thread)
 
 	/** The host (in singleplayer or open to LAN) and operators may change the world's ClaudeCraft settings. */
-	private boolean canEditSettings(ServerPlayer player) {
+	public static final List<String> EFFORTS = List.of("low", "medium", "high", "xhigh", "max");
+
+	/** Claude's effort level, or "default" (Claude Code's own). */
+	public String effort() {
+		return cfg.effort == null || cfg.effort.isBlank() ? "default" : cfg.effort;
+	}
+
+	/** Set the effort level for the turns that start from now on, and save it; "default" clears it. */
+	public void setEffort(String level) {
+		cfg.effort = level.equals("default") ? "" : level;
+		Config.saveSetting(configFile, "effort", new com.google.gson.JsonPrimitive(cfg.effort));
+	}
+
+	public boolean canEditSettings(ServerPlayer player) {
 		return server.isSingleplayerOwner(player.nameAndId())
 			|| player.permissions().hasPermission(net.minecraft.server.permissions.Permissions.COMMANDS_GAMEMASTER);
 	}
@@ -673,6 +686,7 @@ public class ClaudeBridge {
 		out.addProperty("canEdit", canEditSettings(player));
 		out.addProperty("maxConcurrentSessions", cfg.maxConcurrentSessions);
 		out.addProperty("allowPlayerClaude", cfg.allowPlayerClaude);
+		out.addProperty("effort", effort());
 		synchronized (lock) {
 			out.addProperty("usingOwnClaude", remote.containsKey(player.getUUID()));
 		}
@@ -682,6 +696,10 @@ public class ClaudeBridge {
 	/** Apply a setting from the menu now, and save it. */
 	private void changeSetting(String key, com.google.gson.JsonElement value) {
 		switch (key) {
+			case "effort" -> {
+				String level = value.getAsString();
+				if (level.equals("default") || EFFORTS.contains(level)) setEffort(level);
+			}
 			case "maxConcurrentSessions" -> {
 				int n = Math.clamp(value.getAsInt(), 1, MAX_SESSIONS);
 				cfg.maxConcurrentSessions = n;
