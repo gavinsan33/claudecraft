@@ -5,7 +5,7 @@
 	"environment": "*",
 	"entrypoints": {
 		"fabric-gametest": ["dev.claudecraft.ModdingServerTest"],
-		"fabric-client-gametest": ["dev.claudecraft.CustomItemsClientTest", "dev.claudecraft.CustomBlocksClientTest", "dev.claudecraft.CustomEntitiesClientTest", "dev.claudecraft.CustomDimensionsClientTest", "dev.claudecraft.CustomEffectsClientTest", "dev.claudecraft.CustomParticlesClientTest", "dev.claudecraft.CustomMorphsClientTest", "dev.claudecraft.CustomWearablesClientTest", "dev.claudecraft.CustomVehiclesClientTest", "dev.claudecraft.CustomAnimatedBlocksClientTest", "dev.claudecraft.OwnClaudeClientTest", "dev.claudecraft.ClaudeCraftMenuClientTest"]
+		"fabric-client-gametest": ["dev.claudecraft.CustomItemsClientTest", "dev.claudecraft.CustomBlocksClientTest", "dev.claudecraft.CustomEntitiesClientTest", "dev.claudecraft.CustomDimensionsClientTest", "dev.claudecraft.CustomEffectsClientTest", "dev.claudecraft.CustomParticlesClientTest", "dev.claudecraft.CustomMorphsClientTest", "dev.claudecraft.CustomWearablesClientTest", "dev.claudecraft.CustomVehiclesClientTest", "dev.claudecraft.CustomStorageClientTest", "dev.claudecraft.CustomAnimatedBlocksClientTest", "dev.claudecraft.OwnClaudeClientTest", "dev.claudecraft.ClaudeCraftMenuClientTest"]
 	},
 	"depends": { "claudecraft": "*" }
 }

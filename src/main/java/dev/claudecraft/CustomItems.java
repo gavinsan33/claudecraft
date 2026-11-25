@@ -162,6 +162,7 @@ public final class CustomItems {
 		CustomProjectiles.register();
 		Effects.register();
 		Morphs.register();
+		StorageMenus.register();
 		ResourceKey<Item> eggKey = ResourceKey.create(Registries.ITEM, id("custom_spawn_egg"));
 		SPAWN_EGG = Registry.register(BuiltInRegistries.ITEM, eggKey, new CustomSpawnEgg(new Item.Properties().setId(eggKey)));
 		PayloadTypeRegistry.clientboundPlay().registerLarge(DefinitionsPayload.TYPE, DefinitionsPayload.CODEC, MAX_PAYLOAD);
@@ -362,6 +363,7 @@ public final class CustomItems {
 		JsonObject p = props(def);
 		int maxStack = p.has("max_stack") ? Math.max(1, Math.min(99, p.get("max_stack").getAsInt())) : 64;
 		boolean durable = p.has("durability");
+		if (ItemStorage.slots(def) > 0) maxStack = 1; // its contents live in the stack
 		if (durable) {
 			maxStack = 1;
 			s.set(DataComponents.MAX_DAMAGE, Math.max(1, p.get("durability").getAsInt()));
@@ -613,7 +615,13 @@ public final class CustomItems {
 			// Food is eaten the vanilla way; its commands run once it's finished (see finishUsingItem).
 			// Armor is put on the vanilla way too, unless it also does something on right-click.
 			if (p.has("food")) return super.use(level, player, hand);
-			List<String> cmds = strings(p, "use_commands");
+			boolean sneak = player.isSecondaryUseActive();
+			if (ItemStorage.slots(def) > 0 && StorageMenus.openOn(p, "use").equals(sneak ? "sneak_use" : "use")) {
+				if (!level.isClientSide() && player instanceof ServerPlayer sp) ItemStorage.open(sp, hand, stack, def);
+				return InteractionResult.SUCCESS;
+			}
+			// Sneak + right-click can do something else: sneak_use_commands (or open storage, above).
+			List<String> cmds = strings(p, sneak && p.has("sneak_use_commands") ? "sneak_use_commands" : "use_commands");
 			boolean shoots = p.has("shoot");
 			if (cmds.isEmpty() && !shoots) return super.use(level, player, hand);
 			if (!level.isClientSide() && player instanceof ServerPlayer sp) {

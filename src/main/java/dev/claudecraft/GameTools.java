@@ -515,6 +515,8 @@ public class GameTools implements McpServer.Tools {
 				      }},
 				      "color":{"type":"string","description":"#RRGGBB tint for the leather look; default is the model's average color."}}},
 				    "shoot":%s,
+				    "storage":{"type":"object","properties":{"slots":{"type":"integer","description":"1 to 54; any number (5 for a pouch, 12 for a toolbelt). It shows as a chest grid with just that many slots."},"open":{"type":"string","enum":["use","sneak_use"],"description":"Open on right-click (use, default) or on sneak + right-click (sneak_use), leaving right-click for its normal use."}},"description":"Items it holds: a backpack, pouch, quiver, lunchbox, toolbelt. Its contents stay inside the item, travel with it and show in its tooltip; it can't hold other storage items or shulker boxes. Makes it unstackable. For a wearable backpack (armor with worn parts on the chest slot), sneak + right-click with it in hand puts it on unless open is sneak_use."},
+				    "sneak_use_commands":{"type":"array","items":{"type":"string"},"description":"Run instead of use_commands on sneak + right-click: a second power, a mode switch."},
 				    "use_commands":{"type":"array","items":{"type":"string"},"description":"Run as the player on right-click (or when eaten, for food). @s is the player, ~ ~ ~ their position."},
 				    "use_on_block_commands":{"type":"array","items":{"type":"string"},"description":"Run as the player when they right-click a block with it; ~ ~ ~ is the block."},
 				    "use_on_entity_commands":{"type":"array","items":{"type":"string"},"description":"Run as the player when they right-click a creature with it; @target is the creature, ~ ~ ~ its position."},
@@ -597,7 +599,8 @@ public class GameTools implements McpServer.Tools {
 				    "requires_tool":{"type":"boolean"},
 				    "drops":{"type":"array","items":{"type":"string"},"description":"Instead of itself, e.g. [\\"custom:ruby 1-2\\"]. Silk Touch still drops the block."},
 				    "xp":{"description":"Experience when mined: a number or [min, max]."},
-				    "storage":{"type":"integer","description":"Rows of inventory (1 to 6, a chest has 3); right-click opens it."},
+				    "storage":{"type":"object","properties":{"slots":{"type":"integer","description":"1 to 54; any number (5 for a pouch, 12 for a toolbelt). It shows as a chest grid with just that many slots."},"open":{"type":"string","enum":["use","sneak_use"],"description":"Open on right-click (use, default) or on sneak + right-click (sneak_use), leaving right-click for its normal use."}},"description":"Items it holds, like a chest (27 slots), crate, cabinet or safe; right-click opens it (or sneak + right-click with open: sneak_use). A bare number means rows of 9, as in older definitions."},
+				    "sneak_use_commands":{"type":"array","items":{"type":"string"},"description":"Run instead of use_commands when a player sneak + right-clicks it with an empty hand."},
 				    "power":{"type":"integer","description":"Redstone power it gives off, 0 to 15 (a redstone block is 15)."},
 				    "powered_commands":{"type":"array","items":{"type":"string"},"description":"Run at the block when it receives redstone power."},
 				    "unpowered_commands":{"type":"array","items":{"type":"string"},"description":"Run at the block when it loses redstone power."},
@@ -680,6 +683,8 @@ public class GameTools implements McpServer.Tools {
 				    "attack_commands":{"type":"array","items":{"type":"string"},"description":"Run as the creature when its melee attack lands; @target and ~ ~ ~ are the victim."},
 				    "hurt_commands":{"type":"array","items":{"type":"string"},"description":"Run as the creature when it's hurt; @target is the attacker."},
 				    "death_commands":{"type":"array","items":{"type":"string"},"description":"Run as the creature when it dies; @target is the killer."},
+				    "storage":{"type":"object","properties":{"slots":{"type":"integer","description":"1 to 54."}},"description":"Items it carries: a vehicle's trunk or cargo hold, a pack animal's saddlebags. Its rider opens it with the inventory key; anyone opens it with sneak + right-click. It drops everything when it dies."},
+				    "sneak_interact_commands":{"type":"array","items":{"type":"string"},"description":"Run instead of riding or interact_commands when a player sneak + right-clicks it (if it has no storage)."},
 				    "interact_commands":{"type":"array","items":{"type":"string"},"description":"Run as the player when they right-click it, at the creature (~ ~ ~); @target is the creature."},
 				    "spawning":{"type":"object","description":"Appear naturally near players.","properties":{
 				      "biomes":{"type":"array","items":{"type":"string"},"description":"Biome ids or #tags, e.g. minecraft:plains, #minecraft:is_forest. Default: any overworld biome."},
@@ -1865,6 +1870,9 @@ public class GameTools implements McpServer.Tools {
 		}
 		JsonObject props = args.has("properties") ? args.getAsJsonObject("properties") : new JsonObject();
 		oneOf(props, "rarity", List.of("common", "uncommon", "rare", "epic"), "rarity");
+		String badStorage = StorageMenus.validate(props, false);
+		if (badStorage != null) throw new ToolError(badStorage);
+		if (props.has("storage") && props.has("food")) throw new ToolError("storage items can't also be food");
 		JsonObject tool = obj(props, "tool");
 		if (tool != null) {
 			oneOf(tool, "type", CustomItems.TOOL_TYPES, "tool.type");
@@ -1940,6 +1948,8 @@ public class GameTools implements McpServer.Tools {
 			if (parsed.sx > 16 || parsed.sy > 16 || parsed.sz > 16) throw new ToolError("Blocks are at most 16 voxels per side");
 		}
 		JsonObject props = args.has("properties") ? args.getAsJsonObject("properties") : new JsonObject();
+		String badStorage = StorageMenus.validate(props, true);
+		if (badStorage != null) throw new ToolError(badStorage);
 		checkBlockLife(props);
 		oneOf(props, "sound", CustomBlocks.SOUNDS, "sound");
 		oneOf(props, "collision", List.of("model", "full", "none"), "collision");
@@ -1987,6 +1997,8 @@ public class GameTools implements McpServer.Tools {
 			throw new ToolError("Bad model: " + e.getMessage());
 		}
 		JsonObject props = args.has("properties") ? args.getAsJsonObject("properties") : new JsonObject();
+		String badStorage = StorageMenus.validate(props, false);
+		if (badStorage != null) throw new ToolError(badStorage);
 		oneOf(props, "behavior", List.of("passive", "neutral", "hostile"), "behavior");
 		oneOf(props, "movement", CustomEntities.MOVEMENTS, "movement");
 		checkDrops(props);

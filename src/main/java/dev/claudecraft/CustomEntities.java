@@ -154,7 +154,7 @@ public final class CustomEntities {
 		return false;
 	}
 
-	public static final class CustomEntity extends TamableAnimal implements RangedAttackMob {
+	public static final class CustomEntity extends TamableAnimal implements RangedAttackMob, net.minecraft.world.entity.HasCustomInventoryScreen {
 		private static final EntityDataAccessor<String> DEFINITION = SynchedEntityData.defineId(CustomEntity.class, EntityDataSerializers.STRING);
 		private String movementSetUp = "walk";
 		/** Spawned by natural spawning: despawns far from players like vanilla mobs, unless tamed or named. */
@@ -225,6 +225,36 @@ public final class CustomEntities {
 		boolean rideable() {
 			JsonObject p = props();
 			return p.has("rideable") && p.get("rideable").getAsBoolean() || vehicle() != null;
+		}
+
+		// ------------------------------------------------------------ storage
+
+		/** Its inventory (a vehicle's trunk, a pack animal's saddlebags), made when first needed; null if none yet. */
+		private net.minecraft.world.SimpleContainer storage;
+
+		public int storageSlots() {
+			return StorageMenus.slots(props(), false);
+		}
+
+		private net.minecraft.world.SimpleContainer storage() {
+			int size = StorageMenus.rows(Math.max(1, storageSlots())) * 9;
+			if (storage == null || storage.getContainerSize() < size) {
+				var grown = new net.minecraft.world.SimpleContainer(size);
+				if (storage != null) for (int i = 0; i < storage.getContainerSize(); i++) grown.setItem(i, storage.getItem(i));
+				storage = grown;
+			}
+			return storage;
+		}
+
+		/** Open its storage for a player: its rider (the inventory key), or anyone sneak-clicking it, while nearby. */
+		private void openStorage(Player player) {
+			if (storageSlots() <= 0 || !(player instanceof ServerPlayer sp)) return;
+			StorageMenus.open(sp, getName(), storage(), storageSlots(), -1, p -> isAlive() && p.distanceToSqr(this) < 64);
+		}
+
+		@Override
+		public void openCustomInventoryScreen(Player player) {
+			openStorage(player);
 		}
 
 		// ------------------------------------------------------------ vehicles
@@ -507,6 +537,19 @@ public final class CustomEntities {
 				}
 				return InteractionResult.SUCCESS;
 			}
+			if (player.isSecondaryUseActive()) {
+				// Sneak + right-click: open its storage, or its sneak_interact_commands.
+				if (storageSlots() > 0) {
+					if (!level().isClientSide()) openStorage(player);
+					return InteractionResult.SUCCESS;
+				}
+				if (p.has("sneak_interact_commands")) {
+					if (!level().isClientSide() && player instanceof ServerPlayer sp) {
+						CustomItems.runAsPlayer(sp, CustomItems.strings(p, "sneak_interact_commands"), position(), this);
+					}
+					return InteractionResult.SUCCESS;
+				}
+			}
 			boolean mayControl = !tameable() || isOwnedBy(player);
 			if (rideable() && mayControl && !isBaby() && !isVehicle() && !player.isSecondaryUseActive()) {
 				if (!level().isClientSide()) {
@@ -678,6 +721,7 @@ public final class CustomEntities {
 		@Override
 		public void die(DamageSource source) {
 			if (level() instanceof ServerLevel) ClaudeCraft.runAs(this, CustomItems.strings(props(), "death_commands"), position(), source.getEntity());
+			if (storage != null && level() instanceof ServerLevel) net.minecraft.world.Containers.dropContents(level(), this, storage);
 			super.die(source);
 		}
 
@@ -689,12 +733,20 @@ public final class CustomEntities {
 			out.putString("Definition", definitionId());
 			if (!definitionId().isEmpty()) out.putBoolean("DefinitionApplied", true);
 			out.putBoolean("Natural", natural);
+			if (storage != null && !storage.isEmpty()) {
+				out.store("Storage", net.minecraft.world.item.component.ItemContainerContents.CODEC,
+					net.minecraft.world.item.component.ItemContainerContents.fromItems(storage.getItems()));
+			}
 		}
 
 		@Override
 		protected void readAdditionalSaveData(ValueInput in) {
 			super.readAdditionalSaveData(in);
 			natural = in.getBooleanOr("Natural", false);
+			in.read("Storage", net.minecraft.world.item.component.ItemContainerContents.CODEC).ifPresent(c -> {
+				storage = new net.minecraft.world.SimpleContainer((int) Math.max(9, c.itemCopies().count()));
+				c.copyInto(storage.getItems());
+			});
 			// From summon or a spawn egg (no DefinitionApplied yet), start at full health.
 			setDefinition(in.getStringOr("Definition", ""), !in.getBooleanOr("DefinitionApplied", false));
 		}
