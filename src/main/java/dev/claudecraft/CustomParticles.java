@@ -51,6 +51,25 @@ public final class CustomParticles {
 		Map.entry("sonic_boom", "cyan"), Map.entry("shriek", "cyan"), Map.entry("sculk_soul", "teal"), Map.entry("sculk_charge", "teal"),
 		Map.entry("heart", "red"), Map.entry("cherry", "pink"), Map.entry("bubble", "blue"), Map.entry("splash", "blue"));
 
+	/**
+	 * Claude naturally writes CSS-style #RRGGBBAA, but colors here are #AARRGGBB, so "#F0F8FF60" (pale blue, faint) reads as
+	 * a solid yellow-green; that's why particles kept coming out green. New particle definitions use #RRGGBB plus opacity,
+	 * which can't be misread; this says what's wrong with a part's colors, or null. (Saved definitions still load.)
+	 */
+	static String colorProblem(JsonObject p) {
+		for (String key : List.of("colors", "color")) {
+			if (!p.has(key)) continue;
+			JsonArray cs = Spec.list(p, key, "#FFFFFF");
+			for (JsonElement c : cs) {
+				String h = c.getAsString().trim();
+				if (h.replace("#", "").length() == 8) {
+					return "particle colors are #RRGGBB (6 digits), got " + h + "; for transparency and fading use opacity, e.g. opacity: [0.8, 0]";
+				}
+			}
+		}
+		return null;
+	}
+
 	/** Advice when a part tints an already colored sprite, which is why particles come out green instead of gold; or null. */
 	static String tintWarning(JsonObject p) {
 		if (p.has("sprite") || !p.has("colors") && !p.has("color")) return null;
@@ -69,7 +88,7 @@ public final class CustomParticles {
 		public final int spriteW, spriteH;
 		public final boolean randomFrame, emissive, collide, trail;
 		private final int[] colors;
-		private final float[] sizes;
+		private final float[] sizes, opacity;
 		private final double lifeMin, lifeMax, gravity, dragPerTick, spin;
 		public final int burst;
 		final double rate;
@@ -132,6 +151,10 @@ public final class CustomParticles {
 			JsonArray cs = list(d, d.has("colors") ? "colors" : "color", "#FFFFFF");
 			colors = new int[cs.size()];
 			for (int k = 0; k < colors.length; k++) colors[k] = VoxelModel.color(cs.get(k).getAsString());
+			JsonArray os = list(d, "opacity", "1");
+			opacity = new float[os.size()];
+			for (int k = 0; k < opacity.length; k++) opacity[k] = Math.clamp(os.get(k).getAsFloat(), 0, 1);
+			if (opacity.length == 0) throw new IllegalArgumentException("opacity needs at least one value");
 			JsonArray ss = list(d, "sizes", "0.2");
 			sizes = new float[ss.size()];
 			for (int k = 0; k < sizes.length; k++) sizes[k] = Math.clamp(ss.get(k).getAsFloat(), 0, 16);
@@ -235,7 +258,15 @@ public final class CustomParticles {
 				int ca = (colors[a] >>> shift) & 0xFF, cb = (colors[b] >>> shift) & 0xFF;
 				out |= Math.round(ca + (cb - ca) * w) << shift;
 			}
-			return out;
+			int alpha = Math.round((out >>> 24) * lerp(opacity, life));
+			return out & 0xFFFFFF | alpha << 24;
+		}
+
+		/** A value from a list spread evenly over a particle's life (0 to 1). */
+		private static float lerp(float[] values, float life) {
+			float f = life * (values.length - 1);
+			int a = Math.min((int) f, values.length - 1), b = Math.min(a + 1, values.length - 1);
+			return values[a] + (values[b] - values[a]) * (f - a);
 		}
 
 		/** Width in blocks at a point in the particle's life. */

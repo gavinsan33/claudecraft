@@ -88,6 +88,8 @@ public final class Effects {
 			}
 			if (type.equals("sparks") && p.has("count") && p.get("count").getAsInt() > 400) return "part " + i + ": at most 400 sparks";
 			if (type.equals("particles")) {
+				String colorBad = CustomParticles.colorProblem(p);
+				if (colorBad != null) return "part " + i + " (particles): " + colorBad;
 				try {
 					new CustomParticles.Spec(p);
 				} catch (RuntimeException ex) {

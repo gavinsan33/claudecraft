@@ -363,11 +363,61 @@ final class Shapes {
 				case "hypot/2" -> v -> Math.hypot(a.get(0).eval(v), a.get(1).eval(v));
 				case "min/2" -> v -> Math.min(a.get(0).eval(v), a.get(1).eval(v));
 				case "max/2" -> v -> Math.max(a.get(0).eval(v), a.get(1).eval(v));
+				case "noise/1" -> v -> noise(a.get(0).eval(v), 0.37, 0.71);
+				case "noise/2" -> v -> noise(a.get(0).eval(v), a.get(1).eval(v), 0.71);
+				case "noise/3" -> v -> noise(a.get(0).eval(v), a.get(1).eval(v), a.get(2).eval(v));
+				case "rand/0" -> v -> java.util.concurrent.ThreadLocalRandom.current().nextDouble();
+				case "clamp/3" -> v -> Math.clamp(a.get(0).eval(v), a.get(1).eval(v), a.get(2).eval(v));
+				case "lerp/3" -> v -> { double t = a.get(2).eval(v), lo = a.get(0).eval(v); return lo + (a.get(1).eval(v) - lo) * t; };
 				default -> null;
 			};
 			if (f == null) throw error("Unknown function " + name + " with " + n + " argument(s)");
 			return f;
 		}
+	}
+
+	// ---------------------------------------------------------------- noise
+
+	/** Ken Perlin's improved noise: smooth, about -1 to 1, varying over about one unit. Fixed table, so reproducible. */
+	static double noise(double x, double y, double z) {
+		int X = (int) Math.floor(x) & 255, Y = (int) Math.floor(y) & 255, Z = (int) Math.floor(z) & 255;
+		x -= Math.floor(x);
+		y -= Math.floor(y);
+		z -= Math.floor(z);
+		double u = fade(x), v = fade(y), w = fade(z);
+		int a = P[X] + Y, aa = P[a] + Z, ab = P[a + 1] + Z, b = P[X + 1] + Y, ba = P[b] + Z, bb = P[b + 1] + Z;
+		return lerp(w, lerp(v, lerp(u, grad(P[aa], x, y, z), grad(P[ba], x - 1, y, z)),
+				lerp(u, grad(P[ab], x, y - 1, z), grad(P[bb], x - 1, y - 1, z))),
+			lerp(v, lerp(u, grad(P[aa + 1], x, y, z - 1), grad(P[ba + 1], x - 1, y, z - 1)),
+				lerp(u, grad(P[ab + 1], x, y - 1, z - 1), grad(P[bb + 1], x - 1, y - 1, z - 1))));
+	}
+
+	private static double fade(double t) {
+		return t * t * t * (t * (t * 6 - 15) + 10);
+	}
+
+	private static double lerp(double t, double a, double b) {
+		return a + t * (b - a);
+	}
+
+	private static double grad(int hash, double x, double y, double z) {
+		int h = hash & 15;
+		double u = h < 8 ? x : y, v = h < 4 ? y : h == 12 || h == 14 ? x : z;
+		return ((h & 1) == 0 ? u : -u) + ((h & 2) == 0 ? v : -v);
+	}
+
+	private static final int[] P = new int[512];
+
+	static {
+		int[] perm = new int[256];
+		for (int i = 0; i < 256; i++) perm[i] = i;
+		java.util.Random r = new java.util.Random(1337);
+		for (int i = 255; i > 0; i--) {
+			int j = r.nextInt(i + 1), t = perm[i];
+			perm[i] = perm[j];
+			perm[j] = t;
+		}
+		for (int i = 0; i < 512; i++) P[i] = perm[i & 255];
 	}
 
 	// ---------------------------------------------------------------- self-check
@@ -380,6 +430,14 @@ final class Shapes {
 		check(parse("x*x + y*y <= 1 && !(z > 0)", xyz).eval(new double[]{0.5, 0.5, -1}) == 1, "logic");
 		check(parse("max(abs(x), hypot(3, 4))", xyz).eval(new double[]{-7, 0, 0}) == 7, "functions");
 		check(parse("x != 1", xyz).eval(new double[]{1, 0, 0}) == 0, "!=");
+		double n1 = noise(1.3, 2.7, 0.4), n2 = noise(1.31, 2.7, 0.4);
+		check(Math.abs(n1) <= 1.1 && Math.abs(n1 - n2) < 0.05, "noise is bounded and smooth");
+		check(noise(5, 5, 5) == 0 && noise(1.3, 2.7, 0.4) == n1, "noise is zero on the grid and reproducible");
+		boolean varies = false;
+		for (int i = 0; i < 20; i++) varies |= Math.abs(noise(i * 0.37 + 0.1, 0.5, 0.5)) > 0.2;
+		check(varies, "noise varies");
+		double r = parse("rand()", xyz).eval(new double[3]);
+		check(r >= 0 && r < 1, "rand is 0 to 1");
 
 		check(sphere(0, 0, 0, 0, 0, 0, false).voxels(false).size() == 1, "radius-0 sphere is one block");
 		check(sphere(0, 0, 0, 1, 1, 1, false).voxels(false).size() == 19, "radius-1 sphere is a 3x3x3 minus corners");

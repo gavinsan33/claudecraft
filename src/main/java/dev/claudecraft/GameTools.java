@@ -362,7 +362,8 @@ public class GameTools implements McpServer.Tools {
 			"Fill every block in a box where a math expression is true (WorldEdit //generate). Variables: x, y, z run from "
 				+ "-1 to 1 across the box (0 = its center); bx, by, bz are block offsets from the minimum corner; sx, sy, sz are "
 				+ "the box size. Operators + - * / % ^, < <= > >= == !=, && || !, functions abs sqrt sin cos tan asin acos atan "
-				+ "atan2 min max floor ceil round sign exp log pow hypot, constants pi and e. Examples: a tapering curved tower "
+				+ "atan2 min max floor ceil round sign exp log pow hypot clamp lerp, noise(x[,y[,z]]) (smooth noise, about -1 to 1, for "
+				+ "natural, irregular shapes: rocky outcrops, ragged cliffs, uneven paths) and rand() (0 to 1, different per block), constants pi and e. Examples: a tapering curved tower "
 				+ "leg \"abs(x) + abs(z) < (1 - (y+1)/2)^2 * 0.9\", a twisted spire, a wavy wall, an arch. Use it for curves the "
 				+ "other tools can't express." + QUEUED,
 			"""
@@ -474,7 +475,7 @@ public class GameTools implements McpServer.Tools {
 				+ "your voxel model with real lighting. Draw flat items as pixel art in pixels (rows top to bottom, characters "
 				+ "left to right, like a 16x16 vanilla item sprite, extruded thickness voxels deep), or give a 3D model in layers "
 				+ "(place_blueprint format: layers bottom to top, rows along +z, characters along +x). palette maps characters "
-				+ "to #RRGGBB or #AARRGGBB colors (alpha below FF is see-through); '.' and ' ' are empty. Up to 32 voxels per "
+				+ "to #RRGGBB or #AARRGGBB colors (alpha FIRST, not last like CSS: #80FFFFFF is half-see-through white); '.' and ' ' are empty. Up to 32 voxels per "
 				+ "side; 16 is one item's normal size and bigger models are scaled to fit. style picks how it's held: item "
 				+ "(flat items like food, gems, potions), handheld (tools and weapons, held like a sword; draw them diagonally, "
 				+ "bottom-left to top-right like vanilla), block (chunky 3D objects held like a block). properties set behavior: "
@@ -541,7 +542,7 @@ public class GameTools implements McpServer.Tools {
 				+ "sky; give all, or side plus top and bottom, or individual north/south/east/west/top/bottom), or sculpt any "
 				+ "shape in layers (place_blueprint format, at most 16 voxels per side; 16 fills the block, smaller models sit "
 				+ "on the floor centered, e.g. a lamp, a statue, a crystal cluster). palette maps characters to #RRGGBB or "
-				+ "#AARRGGBB colors (alpha below FF is see-through, like glass). Place it with any placement tool as "
+				+ "#AARRGGBB colors (alpha FIRST, not last like CSS: #80FFFFFF is half-see-through white, like glass). Place it with any placement tool as "
 				+ "custom:<id> (patterns and masks too), or give it with give_item. properties: light (0 to 15), hardness "
 				+ "(seconds-ish to mine; 1.5 is stone, 0 instant, -1 unbreakable), sound, collision (model: the voxel shape, "
 				+ "full, or none to walk through), rotate (turns to face whoever places it; the model's south side is its "
@@ -628,7 +629,7 @@ public class GameTools implements McpServer.Tools {
 				+ "is its center, y = 0 its feet, +z is the way it faces (its front) and +x its left side. Each part has "
 				+ "layers (place_blueprint format: layers bottom to top, rows along +z, characters along +x), origin (where "
 				+ "its layers start: the minimum corner) and pivot (the point it rotates around: a hip, shoulder, neck or wing "
-				+ "root; default the top center of the part). One palette of #RRGGBB / #AARRGGBB colors is shared by all parts. "
+				+ "root; default the top center of the part). One palette of #RRGGBB / #AARRGGBB colors (alpha first) is shared by all parts. "
 				+ "scale is voxels per block (default 16, like vanilla mobs: a pig is about 14 long and 14 tall). The hitbox "
 				+ "comes from the model. Up to " + EntityModel.MAX_PARTS + " parts and " + EntityModel.MAX_SPAN + " voxels per side. "
 				+ "properties make it a real mob: stats and behavior, walking, flying, swimming or hopping, food it follows "
@@ -762,7 +763,7 @@ public class GameTools implements McpServer.Tools {
 				    "at":{"type":"string","enum":%s,"description":"Orbs, rings, sparks and particles: at the start (default), the end, or along the beam."},
 				    "start_seconds":{"type":"number"},"end_seconds":{"type":"number","description":"When this part shows, within the effect's time."},
 				    "fade":{"type":"number","description":"Fraction of its time spent fading out at the end, default 0.3; 0 for none."},
-				    "color":{"type":"string","description":"#RRGGBB or #AARRGGBB (alpha makes it fainter)."},
+				    "color":{"type":"string","description":"#RRGGBB, or #AARRGGBB with alpha FIRST (#80FF2020 is a faint red) to make it fainter. particles take #RRGGBB only, with opacity."},
 				    "style":{"type":"string","enum":%s,"description":"beam: straight (laser), lightning (jagged, re-crackling, with branches), wave or spiral."},
 				    "width":{"type":"number","description":"beam: core thickness in blocks, default 0.12."},
 				    "glow":{"type":"number","description":"How far the glow spreads, as a multiple of width (beam, default 3.5) or radius (orb, default 2.2); 0 for none."},
@@ -783,12 +784,13 @@ public class GameTools implements McpServer.Tools {
 				    "gravity":{"type":"number","description":"sparks and particles: blocks per second squared they fall (negative rises)."},
 				    "inward":{"type":"boolean","description":"sparks: swirl in toward the center from radius, endlessly, instead of bursting out."},
 				    "texture":{"type":"string","description":"particles: a vanilla particle sprite. colors multiply the sprite, so only white or gray ones can be any color: generic (small smoke puffs), big_smoke, gust, explosion, spark, glitter, spell, effect, flash, glow, soul, firefly, sweep, leaf, pale_oak, drip_fall, note, critical_hit, enchanted_hit, sga_a..sga_z (enchanting glyphs). These already have their own colors, which colors only darken or fade, never change: flame and lava (orange), soul_fire_flame, sonic_boom and shriek (cyan), copper_fire_flame and glint (green), noxious_gas (yellow-green), heart (red), cherry (pink), bubble and splash (blue), sculk_soul (teal). Names with numbered frames (big_smoke_0..11) play through them over each particle's life; name one frame (generic_7) to use just it. Or block:<block id> for chips of a block's texture (debris: block:minecraft:dirt). Default generic."},
-				    "sprite":{"type":"object","description":"particles: draw your own sprite instead of a vanilla texture, for shapes vanilla doesn't have: snowflakes, stars, runes, hearts, bubbles of a new color, tiny skulls, embers, petals, raindrops. Pixel art up to 16x16 (8x8 reads best at particle size): pixels (rows top to bottom, characters left to right, '.' and ' ' are clear) with a palette of #RRGGBB or #AARRGGBB, or frames (a list of such pixel grids, up to 16) for an animated one, played over each particle's life or picked at random with frames: random. colors still multiply it, so leave colors white to keep your sprite's own colors, or draw it in white and grays and color it with colors.","properties":{
+				    "sprite":{"type":"object","description":"particles: draw your own sprite instead of a vanilla texture, for shapes vanilla doesn't have: snowflakes, stars, runes, hearts, bubbles of a new color, tiny skulls, embers, petals, raindrops. Pixel art up to 16x16 (8x8 reads best at particle size): pixels (rows top to bottom, characters left to right, '.' and ' ' are clear) with a palette of #RRGGBB or #AARRGGBB (alpha first), or frames (a list of such pixel grids, up to 16) for an animated one, played over each particle's life or picked at random with frames: random. colors still multiply it, so leave colors white to keep your sprite's own colors, or draw it in white and grays and color it with colors.","properties":{
 				      "palette":{"type":"object","additionalProperties":{"type":"string"}},
 				      "pixels":{"type":"array","items":{"type":"string"}},
 				      "frames":{"type":"array","items":{"type":"array","items":{"type":"string"}}}}},
 				    "frames":{"type":"string","enum":["life","random"],"description":"particles: play an animated sprite's frames over its life (default) or pick one at random (leaves)."},
-				    "colors":{"type":"array","items":{"type":"string"},"description":"particles: #RRGGBB or #AARRGGBB across its life, e.g. [#FFE080, #FF6020, #00402020] to fade out. Default color, or white."},
+				    "colors":{"type":"array","items":{"type":"string"},"description":"particles: #RRGGBB colors across its life, e.g. [#FFE080, #FF6020, #402020] for fire cooling to smoke. Six digits only; use opacity for transparency. Default color, or white."},
+				    "opacity":{"type":"array","items":{"type":"number"},"description":"particles: 0 to 1 across its life, e.g. [0.9, 0] to fade out, [0, 1, 0] to fade in and out. Default 1."},
 				    "sizes":{"type":"array","items":{"type":"number"},"description":"particles: width in blocks across its life, e.g. [0.5, 2]. Default 0.2."},
 				    "lifetime":{"type":"array","items":{"type":"number"},"description":"particles: [min, max] seconds. Default 1."},
 				    "rate":{"type":"number","description":"particles: how many per second while the part lasts (up to %d), on top of a burst of count (up to %d)."},
@@ -832,7 +834,7 @@ public class GameTools implements McpServer.Tools {
 				  "id":{"type":"string","description":"Lowercase letters, digits and underscores, e.g. spider_morph."},
 				  "name":{"type":"string"},
 				  "hide":{"description":"Vanilla parts to hide: all, or a list like [body]. Default none.","anyOf":[{"type":"string"},{"type":"array","items":{"type":"string","enum":["head","body","right_arm","left_arm","right_leg","left_leg"]}}]},
-				  "palette":{"type":"object","additionalProperties":{"type":"string"},"description":"Colors for voxel parts, #RRGGBB or #AARRGGBB."},
+				  "palette":{"type":"object","additionalProperties":{"type":"string"},"description":"Colors for voxel parts, #RRGGBB or #AARRGGBB (alpha first)."},
 				  "parts":{"type":"array","items":{"type":"object","properties":{
 				    "skin":{"type":"string","enum":["head","body","right_arm","left_arm","right_leg","left_leg"],"description":"A skin part: which piece of the skin to use."},
 				    "center":{"type":"array","items":{"type":"number"},"description":"skin parts: the box's center. Default where that vanilla part stands."},
@@ -1020,7 +1022,7 @@ public class GameTools implements McpServer.Tools {
 		return new BlockPos(o.get("x").getAsInt(), o.get("y").getAsInt(), o.get("z").getAsInt());
 	}
 
-	private static final class BlockParser {
+	static final class BlockParser {
 		private final HolderLookup<Block> lookup;
 		private final Map<String, BlockState> cache = new HashMap<>();
 

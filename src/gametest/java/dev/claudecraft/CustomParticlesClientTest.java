@@ -19,7 +19,7 @@ public class CustomParticlesClientTest implements FabricClientGameTest {
 
 	private static final String TORNADO = """
 		{"id":"tornado","name":"Tornado","duration_seconds":20,"parts":[
-		 {"type":"particles","texture":"big_smoke","colors":["#00706458","#C0706458","#A0605448","#00504438"],
+		 {"type":"particles","texture":"big_smoke","colors":["#706458","#706458","#605448","#504438"],"opacity":[0,0.75,0.63,0],
 		  "sizes":[1.2,3],"lifetime":[2.5,4],"rate":200,
 		  "spawn":{"x":"cos(r1*2*pi)*(0.6 + r2^1.5*18*0.35)","y":"r2^1.5*18","z":"sin(r1*2*pi)*(0.6 + r2^1.5*18*0.35)"},
 		  "flow":%s},
@@ -34,6 +34,15 @@ public class CustomParticlesClientTest implements FabricClientGameTest {
 			String summary = sp.getServer().computeOnServer(server -> {
 				JsonObject def = JsonParser.parseString(TORNADO).getAsJsonObject();
 				def.addProperty("kind", "effect");
+				// CSS-style #RRGGBBAA would read as a different, solid color (it's how fountains came out green): refused.
+				JsonObject css = def.deepCopy();
+				css.getAsJsonArray("parts").get(0).getAsJsonObject().add("colors", JsonParser.parseString("[\"#F0F8FF60\"]"));
+				if (Effects.validate(css) == null || !Effects.validate(css).contains("opacity")) throw new AssertionError("8-digit particle colors should be refused");
+				// opacity fades a particle: white at full, then half, then gone.
+				var spec = new CustomParticles.Spec(JsonParser.parseString("{\"colors\":[\"#FFFFFF\"],\"opacity\":[1,0],\"count\":1}").getAsJsonObject());
+				if (spec.color(0) != 0xFFFFFFFF || (spec.color(0.5f) >>> 24) != 128 || (spec.color(1) >>> 24) != 0 || (spec.color(0.5f) & 0xFFFFFF) != 0xFFFFFF) {
+					throw new AssertionError("opacity should fade white out without changing its color");
+				}
 				String bad = Effects.validate(def);
 				if (bad != null) throw new AssertionError(bad);
 				CustomItems.define(server, def);
