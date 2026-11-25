@@ -60,6 +60,8 @@ Just type in chat. Claude replies as `[Claude]`, and the bar above your hotbar s
 - `/claude undo [steps]`: undo Claude's block changes. One step is one request.
 - `/claude reset`: start a fresh conversation.
 - `/claude ask <message>`: talk to Claude without the chat trigger.
+- `/claude new <message>`: start a separate request alongside what Claude is already doing for you. New requests usually do this on their own; follow-ups like "make it bigger" stay with the request they're about.
+- `/claude effort [low|medium|high|xhigh|max|default]`: show or change how hard Claude thinks (the host or an operator can change it).
 - `/claude status`
 
 ## Settings

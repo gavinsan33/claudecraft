@@ -86,16 +86,24 @@ public final class ClaudeCraftScreen extends Screen {
 		CycleButton<Integer> sessions = CycleButton.<Integer>builder(n -> Component.literal(String.valueOf(n)), Math.clamp(max, 1, MAX_SESSIONS))
 			.withValues(List.of(1, 2, 3, 4, 5, 6, 7, 8))
 			.withTooltip(n -> Tooltip.create(Component.literal(
-				"How many requests the host's Claude works on at once. Each is its own conversation; a player's follow-ups "
-					+ "stay with the one handling them." + (n == 1 ? " At 1, requests wait their turn." : ""))))
+				"How many requests the host's Claude works on at once. Each is its own conversation. Follow-ups (\"make it "
+					+ "bigger\") stay with the one handling them; a new request runs alongside in a free one, and /claude new "
+					+ "<message> always does." + (n == 1 ? " At 1, requests wait their turn." : ""))))
 			.create(0, 0, WIDTH, 20, Component.literal("Claude sessions at once"), (b, n) -> set("maxConcurrentSessions", new JsonPrimitive(n)));
+		String effortNow = loaded && s.has("effort") ? s.get("effort").getAsString() : "default";
+		CycleButton<String> effort = CycleButton.<String>builder(Component::literal, effortNow)
+			.withValues(List.of("default", "low", "medium", "high", "xhigh", "max"))
+			.withTooltip(e -> Tooltip.create(Component.literal(
+				"How hard Claude thinks before acting. Higher builds more carefully but takes longer and uses more of your plan; "
+					+ "default is Claude Code's own. Applies from Claude's next turn. Also /claude effort <level>.")))
+			.create(0, 0, WIDTH, 20, Component.literal("Claude's effort"), (b, e) -> set("effort", new JsonPrimitive(e)));
 		boolean allow = loaded && s.get("allowPlayerClaude").getAsBoolean();
 		CycleButton<Boolean> friends = CycleButton.onOffBuilder(allow)
 			.withTooltip(on -> Tooltip.create(Component.literal(
 				"Let players who turn on \"Use my own Claude\" run Claude on their own computer, with their own account. "
 					+ "Only players allowed to talk to Claude can.")))
 			.create(0, 0, WIDTH, 20, Component.literal("Friends can use their own Claude"), (b, on) -> set("allowPlayerClaude", new JsonPrimitive(on)));
-		for (CycleButton<?> b : List.of(sessions, friends)) {
+		for (CycleButton<?> b : List.of(sessions, effort, friends)) {
 			b.active = canEdit;
 			if (loaded && !canEdit) b.setTooltip(Tooltip.create(Component.literal("Only the host or an operator can change this.")));
 			col.addChild(b);

@@ -14,6 +14,8 @@ public class Config {
 	public String claudePath = "";
 	/** Model alias or id passed to --model. Empty = Claude Code's default. */
 	public String model = "";
+	/** Claude's effort level (low, medium, high, xhigh, max), or empty for Claude Code's default. */
+	public String effort = "";
 	/** Only chat messages starting with this are sent to Claude (prefix is stripped). Empty = every message. */
 	public String triggerPrefix = "";
 	/** Permission level for commands Claude runs: 0 all, 1 moderators, 2 gamemasters, 3 admins, 4 owners. */

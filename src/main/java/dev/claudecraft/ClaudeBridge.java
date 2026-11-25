@@ -41,7 +41,12 @@ public class ClaudeBridge {
 	private static final int REMOTE_GRACE_SECONDS = 60;
 
 	/** A chat message waiting for Claude, with a snapshot of where the sender was. */
-	public record Pending(String player, String text, String where) {}
+	/** A chat message for Claude. fresh: the player asked for it to run alongside their other requests (/claude new). */
+	public record Pending(String player, String text, String where, boolean fresh) {
+		public Pending(String player, String text, String where) {
+			this(player, text, where, false);
+		}
+	}
 
 	private final MinecraftServer server;
 	private final Config cfg;
@@ -139,6 +144,8 @@ public class ClaudeBridge {
 		volatile String sessionId;
 		/** The player whose message started the current turn. */
 		volatile String requester;
+		/** What it's working on, for the other sessions to know: who asked, and what. */
+		volatile String request = "";
 		/** What this session is doing right now, shown in the status line. */
 		volatile String activity = THINKING[0];
 		volatile String thinkingVerb = THINKING[0];
@@ -184,9 +191,12 @@ public class ClaudeBridge {
 	// ---------------------------------------------------------------- public API (called on the server thread)
 
 	public void submit(Pending msg) {
-		boolean busy;
+		boolean busy, several;
+		Slot slot, mine;
 		synchronized (lock) {
-			Slot slot = pick(msg.player());
+			several = local.size() > 1;
+			mine = sessionFor(msg.player());
+			slot = pick(msg);
 			slot.queue.add(msg);
 			busy = slot.running;
 			if (!slot.running) {
@@ -195,18 +205,41 @@ public class ClaudeBridge {
 			}
 		}
 		ServerPlayer p = server.getPlayerList().getPlayerByName(msg.player());
-		if (p != null && busy) {
-			p.sendSystemMessage(Component.literal("Claude is busy; your message will be handled next.").withStyle(ChatFormatting.GRAY));
+		if (p == null) return;
+		if (mine != null && slot != mine && slot.owner == null) {
+			p.sendSystemMessage(Component.literal("Claude #" + (slot.index + 1) + " is taking this alongside your other request.").withStyle(ChatFormatting.GRAY));
+		} else if (busy) {
+			boolean couldRunAlongside = several && slot.owner == null;
+			p.sendSystemMessage(Component.literal("Claude is busy; your message will be handled next."
+				+ (couldRunAlongside && !msg.fresh() ? " To run it alongside instead, use /claude new <message>." : "")).withStyle(ChatFormatting.GRAY));
 		}
 	}
 
-	/** Which session gets a player's message. Call with {@link #lock} held. */
-	private Slot pick(String player) {
-		// A player with their own Claude always uses it.
-		for (Slot s : remote.values()) if (s.ownerName.equals(player)) return s;
-		// Already working on (or queued for) this player: keep the conversation together.
+	/** The host session working on (or queued for) a player's requests right now, or null. Call with {@link #lock} held. */
+	private Slot sessionFor(String player) {
 		for (Slot s : local) if (s.has(player)) return s;
 		for (Slot s : retiring) if (s.has(player)) return s;
+		return null;
+	}
+
+	/**
+	 * Which session gets a message. Call with {@link #lock} held. A follow-up to what a session is doing for this
+	 * player stays with it, so the conversation holds together; a separate request goes to an idle session and runs
+	 * alongside, instead of waiting behind the first.
+	 */
+	private Slot pick(Pending msg) {
+		String player = msg.player();
+		// A player with their own Claude always uses it.
+		for (Slot s : remote.values()) if (s.ownerName.equals(player)) return s;
+		Slot mine = sessionFor(player);
+		if (mine != null) {
+			if (!msg.fresh() && Routing.isFollowUp(msg.text())) return mine;
+			for (Slot s : local) if (!s.running) return s;
+			if (!msg.fresh()) return mine; // everyone's busy: wait with the session that knows what you're doing
+			Slot best = null;
+			for (Slot s : local) if (s != mine && (best == null || s.queue.size() < best.queue.size())) best = s;
+			return best != null ? best : mine;
+		}
 		Slot last = lastSlot.get(player);
 		boolean lastIsLocal = last != null && local.contains(last);
 		if (lastIsLocal && !last.running) return last;
@@ -407,6 +440,8 @@ public class ClaudeBridge {
 					if (!slot.handling.contains(m.player())) slot.handling.add(m.player());
 					lastSlot.put(m.player(), slot);
 				}
+				Pending first = batch.getFirst();
+				slot.request = first.player() + ": \"" + (first.text().length() > 140 ? first.text().substring(0, 140) + "…" : first.text()) + "\"";
 			}
 			slot.cancelled = false;
 			slot.thinkingVerb = THINKING[java.util.concurrent.ThreadLocalRandom.current().nextInt(THINKING.length)];
@@ -431,11 +466,12 @@ public class ClaudeBridge {
 	}
 
 	/** Players another session is working for right now, so Claude knows the world may change under it. */
+	/** What the other busy sessions are doing: "Alex: \"build a castle\"" each. */
 	private List<String> othersBusy(Slot self) {
 		List<String> out = new ArrayList<>();
 		List<Slot> all = allSlots();
 		synchronized (lock) {
-			for (Slot s : all) if (s != self && s.running) for (String p : s.handling) if (!out.contains(p)) out.add(p);
+			for (Slot s : all) if (s != self && s.running && !s.handling.isEmpty()) out.add(s.request);
 		}
 		return out;
 	}
@@ -453,8 +489,10 @@ public class ClaudeBridge {
 		}
 		List<String> others = othersBusy(slot);
 		if (!others.isEmpty()) {
-			prompt.append("[Another Claude session is working on a separate request for ").append(String.join(", ", others))
-				.append(" at the same time. Blocks may change that you didn't place; leave its work alone.]\n");
+			prompt.append("[Other Claude sessions are working at the same time on: ").append(String.join("; ", others))
+				.append(". They have their own conversations, so you only know what's said here. Blocks may change that you didn't place; "
+					+ "leave their work alone and build somewhere else unless this request is about it. If this message only makes sense as "
+					+ "part of one of those requests, say so in one short line and suggest waiting for it to finish.]\n");
 		}
 		if (slot.owner != null) runRemoteTurn(slot, prompt.toString());
 		else runLocalTurn(slot, prompt.toString(), true);
@@ -625,7 +663,20 @@ public class ClaudeBridge {
 	// ---------------------------------------------------------------- settings menu (server thread)
 
 	/** The host (in singleplayer or open to LAN) and operators may change the world's ClaudeCraft settings. */
-	private boolean canEditSettings(ServerPlayer player) {
+	public static final List<String> EFFORTS = List.of("low", "medium", "high", "xhigh", "max");
+
+	/** Claude's effort level, or "default" (Claude Code's own). */
+	public String effort() {
+		return cfg.effort == null || cfg.effort.isBlank() ? "default" : cfg.effort;
+	}
+
+	/** Set the effort level for the turns that start from now on, and save it; "default" clears it. */
+	public void setEffort(String level) {
+		cfg.effort = level.equals("default") ? "" : level;
+		Config.saveSetting(configFile, "effort", new com.google.gson.JsonPrimitive(cfg.effort));
+	}
+
+	public boolean canEditSettings(ServerPlayer player) {
 		return server.isSingleplayerOwner(player.nameAndId())
 			|| player.permissions().hasPermission(net.minecraft.server.permissions.Permissions.COMMANDS_GAMEMASTER);
 	}
@@ -635,6 +686,7 @@ public class ClaudeBridge {
 		out.addProperty("canEdit", canEditSettings(player));
 		out.addProperty("maxConcurrentSessions", cfg.maxConcurrentSessions);
 		out.addProperty("allowPlayerClaude", cfg.allowPlayerClaude);
+		out.addProperty("effort", effort());
 		synchronized (lock) {
 			out.addProperty("usingOwnClaude", remote.containsKey(player.getUUID()));
 		}
@@ -644,6 +696,10 @@ public class ClaudeBridge {
 	/** Apply a setting from the menu now, and save it. */
 	private void changeSetting(String key, com.google.gson.JsonElement value) {
 		switch (key) {
+			case "effort" -> {
+				String level = value.getAsString();
+				if (level.equals("default") || EFFORTS.contains(level)) setEffort(level);
+			}
 			case "maxConcurrentSessions" -> {
 				int n = Math.clamp(value.getAsInt(), 1, MAX_SESSIONS);
 				cfg.maxConcurrentSessions = n;

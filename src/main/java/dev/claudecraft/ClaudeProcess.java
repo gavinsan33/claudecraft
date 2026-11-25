@@ -85,6 +85,10 @@ public final class ClaudeProcess {
 			cmd.add("--model");
 			cmd.add(cfg.model);
 		}
+		if (cfg.effort != null && !cfg.effort.isBlank()) {
+			cmd.add("--effort");
+			cmd.add(cfg.effort);
+		}
 		cmd.addAll(cfg.extraArgs);
 
 		Files.createDirectories(workDir);
