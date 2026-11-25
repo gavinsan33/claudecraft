@@ -44,6 +44,22 @@ public final class CustomParticles {
 		});
 	}
 
+	/** Sprites that are already colored (average color named): tinting can only darken or fade them, not change their color. */
+	static final Map<String, String> PRECOLORED = Map.ofEntries(Map.entry("glint", "green"), Map.entry("copper_fire_flame", "green"),
+		Map.entry("noxious_gas", "yellow-green"), Map.entry("flame", "orange"), Map.entry("lava", "orange"), Map.entry("soul_fire_flame", "cyan"),
+		Map.entry("sonic_boom", "cyan"), Map.entry("shriek", "cyan"), Map.entry("sculk_soul", "teal"), Map.entry("sculk_charge", "teal"),
+		Map.entry("heart", "red"), Map.entry("cherry", "pink"), Map.entry("bubble", "blue"), Map.entry("splash", "blue"));
+
+	/** Advice when a part tints an already colored sprite, which is why particles come out green instead of gold; or null. */
+	static String tintWarning(JsonObject p) {
+		if (!p.has("colors") && !p.has("color")) return null;
+		String tex = p.has("texture") ? p.get("texture").getAsString().replaceFirst("^minecraft:", "") : "generic";
+		String family = tex.replaceFirst("_\\d+$", "");
+		String color = PRECOLORED.get(family);
+		return color == null ? null : "texture " + tex + " is already " + color + ", and colors only darken it, so it will look " + color
+			+ "; for your own colors use a white sprite like spark, glitter, glow, effect, generic or big_smoke";
+	}
+
 	public static final class Spec {
 		/** A particle sprite name (minecraft:big_smoke) or block:<block id>. */
 		public final String texture;

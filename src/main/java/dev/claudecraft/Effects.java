@@ -111,6 +111,8 @@ public final class Effects {
 			int end = p.has("end_seconds") ? (int) Math.round(p.get("end_seconds").getAsDouble() * 20) : durationTicks(def);
 			sb.append(" Part ").append(i).append(" dry run: ")
 				.append(new CustomParticles.Spec(p).summary(Math.max(1, end - start), java.util.concurrent.ThreadLocalRandom.current())).append('.');
+			String tint = CustomParticles.tintWarning(p);
+			if (tint != null) sb.append(" Careful: ").append(tint).append('.');
 		}
 		return sb.toString();
 	}
