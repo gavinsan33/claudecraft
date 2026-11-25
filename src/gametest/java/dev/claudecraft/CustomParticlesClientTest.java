@@ -55,6 +55,34 @@ public class CustomParticlesClientTest implements FabricClientGameTest {
 				.stream().allMatch(e -> e.shouldRender(mc.gameRenderer.mainCamera().position().x, mc.gameRenderer.mainCamera().position().y, mc.gameRenderer.mainCamera().position().z)));
 			if (!shown) throw new AssertionError("an effect 40 blocks away should still render");
 			ctx.takeScreenshot("claudecraft-tornado");
+
+			// Claude's own sprite: a two-frame snowflake falling and twinkling in front of the camera.
+			String fallen = sp.getServer().computeOnServer(server -> {
+				JsonObject snow = JsonParser.parseString("""
+					{"id":"snowfall","name":"Snowfall","kind":"effect","duration_seconds":10,"parts":[
+					 {"type":"particles","rate":60,"sizes":[0.5],"lifetime":[3,4],"emissive":true,"spin":0.3,
+					  "sprite":{"palette":{"w":"#FFFFFF","b":"#9CD4FF"},"frames":[
+					   ["..w.w..","w.www.w",".wwbww.","wwbbbww",".wwbww.","w.www.w","..w.w.."],
+					   ["...w...","..www..",".wbwbw.","wwbbbww",".wbwbw.","..www..","...w..."]]},
+					  "spawn":{"x":"(r1-0.5)*8","y":"4 + r2*2","z":"(r3-0.5)*3"},"velocity":{"y":"-1"}}]}""").getAsJsonObject();
+				if (Effects.validate(snow) != null) throw new AssertionError(Effects.validate(snow));
+				CustomItems.define(server, snow);
+				var player = server.getPlayerList().getPlayers().getFirst();
+				var src = server.createCommandSourceStack();
+				server.getCommands().performPrefixedCommand(src, String.format(java.util.Locale.ROOT, "claude effect snowfall %.1f %.1f %.1f",
+					player.getX(), player.getY(), player.getZ() + 6));
+				// A falling block written the natural way (properties inline) should stay that block, not turn into sand.
+				String cmd = CommandRewriter.rewrite(String.format(java.util.Locale.ROOT,
+					"summon falling_block %.1f %.1f %.1f {BlockState:{Name:\"minecraft:oak_log[axis=x]\"},NoGravity:1b,Time:1}",
+					player.getX() + 2, player.getY() + 3, player.getZ() + 5), CustomItems.DEFS::get, CustomItems.commandItems(server));
+				server.getCommands().performPrefixedCommand(src, cmd);
+				var blocks = server.overworld().getEntitiesOfClass(net.minecraft.world.entity.item.FallingBlockEntity.class, player.getBoundingBox().inflate(10));
+				return blocks.isEmpty() ? "none" : blocks.getFirst().getBlockState().toString();
+			});
+			if (!fallen.contains("oak_log") || !fallen.contains("axis=x")) throw new AssertionError("falling block should be an oak log on its side, got " + fallen);
+			ctx.runOnClient(mc -> mc.player.setXRot(0));
+			ctx.waitTicks(60);
+			ctx.takeScreenshot("claudecraft-snowflakes");
 		}
 	}
 }

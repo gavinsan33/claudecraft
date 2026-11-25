@@ -145,6 +145,7 @@ public class ClaudeCraft implements ModInitializer {
 
 	private static void start(MinecraftServer server, Path configDir) {
 		config = Config.load(configDir.resolve("config.json"));
+		quietCommands(server);
 		CustomItems.load(server);
 		CustomItems.onServerChange = () -> CustomRecipes.sync(server);
 		CustomRecipes.sync(server);
@@ -168,6 +169,22 @@ public class ClaudeCraft implements ModInitializer {
 
 	static ClaudeBridge bridge() {
 		return bridge;
+	}
+
+	/**
+	 * The first time the mod runs in a world, turn off sendCommandFeedback, so the commands items, blocks and Claude run
+	 * don't fill chat with their results. Only once, so players can turn it back on.
+	 */
+	private static void quietCommands(MinecraftServer server) {
+		Path marker = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).resolve("claudecraft").resolve("quiet-commands");
+		if (Files.exists(marker)) return;
+		server.getGameRules().set(net.minecraft.world.level.gamerules.GameRules.SEND_COMMAND_FEEDBACK, false, server);
+		try {
+			Files.createDirectories(marker.getParent());
+			Files.writeString(marker, "sendCommandFeedback was turned off once by ClaudeCraft; delete this file to have it done again.\n");
+		} catch (Exception e) {
+			LOGGER.error("Couldn't record that command feedback was turned off", e);
+		}
 	}
 
 	/** Run a custom item's commands as the player using it. Server thread. */

@@ -578,7 +578,7 @@ public class GameTools implements McpServer.Tools {
 				    "light":{"type":"integer"},
 				    "glow":{"type":"boolean","description":"Drawn at full brightness even in the dark, like lava. Pair with light."},
 				    "particles":{"type":"array","items":{"type":"object","properties":{
-				      "type":{"type":"string","description":"flame, small_flame, soul_fire_flame, smoke, large_smoke, campfire_cosy_smoke, portal, reverse_portal, enchant, end_rod, electric_spark, glow, dripping_lava, dripping_water, falling_water, snowflake, cherry_leaves, spore_blossom_air, firefly, note, heart, happy_villager, or dust (with color)."},
+				      "type":{"type":"string","description":"flame, small_flame, soul_fire_flame, smoke, large_smoke, campfire_cosy_smoke, portal, reverse_portal, enchant, end_rod, electric_spark, glow (aqua-green), dripping_lava, dripping_water, falling_water, snowflake, cherry_leaves, spore_blossom_air, firefly, note, heart, happy_villager (green), or dust (with color). Most of these have a fixed color; use dust with a color for anything else, like gold or white sparkles."},
 				      "where":{"type":"string","enum":%s,"description":"inside the model (default), rising off the top, or drifting off the sides."},
 				      "count":{"type":"integer","description":"Per burst, default 1 (a nether portal uses 4). Bursts come about twice a second per block near players."},
 				      "chance":{"type":"number","description":"Chance of each burst, 0 to 1 (default 1)."},
@@ -658,6 +658,16 @@ public class GameTools implements McpServer.Tools {
 				    "tame":{"type":"object","description":"Make it tamable: feed it these until it's tamed (chance per item, default 0.33).","properties":{
 				      "items":{"type":"array","items":{"type":"string"}},"chance":{"type":"number"}}},
 				    "rideable":{"type":"boolean","description":"Players (its owner, if tamable) ride it by right-clicking; it goes where they look. Flying mounts climb with jump."},
+				    "vehicle":{"type":"object","description":"Make it a vehicle instead of a creature: no AI (it never wanders, flees or fights), players get in by right-clicking and drive it, and it moves with its own physics. thrust controls are for rockets, jetpacks, hover-bikes, spaceships and hot-air balloons: hold jump to thrust up, W/A/S/D push it forward, left, back and right, it turns to face where the rider looks, gravity pulls it back down and it leans the way it moves. drive controls are for cars, karts, tractors and buggies: W/S drive and reverse, A/D steer, it stays on the ground and climbs single blocks.","properties":{
+				      "controls":{"type":"string","enum":["thrust","drive"]},
+				      "max_speed":{"type":"number","description":"Blocks per second. Default 12 (thrust) or 10 (drive); a sprinting player is about 6."},
+				      "acceleration":{"type":"number","description":"How fast WASD speed it up, blocks per second squared. Default 12 (thrust) or 8 (drive)."},
+				      "thrust":{"type":"number","description":"thrust: upward push while holding jump, blocks per second squared. Default 28; it must beat gravity to climb."},
+				      "gravity":{"type":"number","description":"Blocks per second squared. Default 16 (thrust: it sinks back down when you let go) or 32 (drive); 0 makes a thrust vehicle hover."},
+				      "tilt":{"type":"number","description":"Degrees it leans at top speed: banks toward where it drifts, tips toward where it's going. Default 25 (thrust) or 0 (drive)."},
+				      "turn":{"type":"number","description":"thrust: how quickly it turns to where the rider looks, 0 to 1 (default 0.15). drive: degrees per tick at speed (default 4)."},
+				      "exhaust":{"type":"string","description":"An effect (from define_effect) played under it while the rider thrusts (thrust) or presses forward (drive): flames, smoke. Make it short (0.2 to 0.4 seconds, it repeats) with trail: true particles so the smoke stays behind."},
+				      "exhaust_at":{"type":"array","items":{"type":"number"},"description":"Where the exhaust comes out, in the model's voxels (default 0 0 0, the bottom center); e.g. 0 2 -10 for a car's tailpipe."}}},
 				    "ranged":{"type":"object","description":"Attack from range instead of melee (neutral or hostile).","properties":{
 				      "projectile":{"type":"string","description":"beam (instant ray), arrow, fireball, small_fireball, wind_charge, or an item id like minecraft:snowball or custom:<id> that flies as that item."},
 				      "effect":{"type":"string","description":"Effect drawn along a beam, or carried by a flying item."},"hit_effect":{"type":"string"},
@@ -767,7 +777,11 @@ public class GameTools implements McpServer.Tools {
 				    "count":{"type":"integer","description":"sparks: how many (up to 400); particles: a burst when the part starts."},"size":{"type":"number","description":"sparks: size in blocks, default 0.08."},
 				    "gravity":{"type":"number","description":"sparks and particles: blocks per second squared they fall (negative rises)."},
 				    "inward":{"type":"boolean","description":"sparks: swirl in toward the center from radius, endlessly, instead of bursting out."},
-				    "texture":{"type":"string","description":"particles: a vanilla particle sprite: generic (small smoke puffs), big_smoke, gust, small_gust, explosion, sonic_boom, spark, glitter, spell, effect, flash, glow, flame, soul_fire_flame, copper_fire_flame, soul, sculk_soul, leaf, cherry, pale_oak, splash, bubble, bubble_pop, drip_fall, lava, heart, note, angry, critical_hit, enchanted_hit, firefly, sweep, shriek, sga_a..sga_z (enchanting glyphs). Names with numbered frames (big_smoke_0..11) play through them over each particle's life; name one frame (generic_7) to use just it. Or block:<block id> for chips of a block's texture (debris: block:minecraft:dirt). Default generic."},
+				    "texture":{"type":"string","description":"particles: a vanilla particle sprite. colors multiply the sprite, so only white or gray ones can be any color: generic (small smoke puffs), big_smoke, gust, explosion, spark, glitter, spell, effect, flash, glow, soul, firefly, sweep, leaf, pale_oak, drip_fall, note, critical_hit, enchanted_hit, sga_a..sga_z (enchanting glyphs). These already have their own colors, which colors only darken or fade, never change: flame and lava (orange), soul_fire_flame, sonic_boom and shriek (cyan), copper_fire_flame and glint (green), noxious_gas (yellow-green), heart (red), cherry (pink), bubble and splash (blue), sculk_soul (teal). Names with numbered frames (big_smoke_0..11) play through them over each particle's life; name one frame (generic_7) to use just it. Or block:<block id> for chips of a block's texture (debris: block:minecraft:dirt). Default generic."},
+				    "sprite":{"type":"object","description":"particles: draw your own sprite instead of a vanilla texture, for shapes vanilla doesn't have: snowflakes, stars, runes, hearts, bubbles of a new color, tiny skulls, embers, petals, raindrops. Pixel art up to 16x16 (8x8 reads best at particle size): pixels (rows top to bottom, characters left to right, '.' and ' ' are clear) with a palette of #RRGGBB or #AARRGGBB, or frames (a list of such pixel grids, up to 16) for an animated one, played over each particle's life or picked at random with frames: random. colors still multiply it, so leave colors white to keep your sprite's own colors, or draw it in white and grays and color it with colors.","properties":{
+				      "palette":{"type":"object","additionalProperties":{"type":"string"}},
+				      "pixels":{"type":"array","items":{"type":"string"}},
+				      "frames":{"type":"array","items":{"type":"array","items":{"type":"string"}}}}},
 				    "frames":{"type":"string","enum":["life","random"],"description":"particles: play an animated sprite's frames over its life (default) or pick one at random (leaves)."},
 				    "colors":{"type":"array","items":{"type":"string"},"description":"particles: #RRGGBB or #AARRGGBB across its life, e.g. [#FFE080, #FF6020, #00402020] to fade out. Default color, or white."},
 				    "sizes":{"type":"array","items":{"type":"number"},"description":"particles: width in blocks across its life, e.g. [0.5, 2]. Default 0.2."},
@@ -1987,6 +2001,15 @@ public class GameTools implements McpServer.Tools {
 			String bad = CustomProjectiles.validate(ranged);
 			if (bad != null) throw new ToolError(bad);
 			checkEffects(ranged);
+		}
+		JsonObject vehicle = obj(props, "vehicle");
+		if (vehicle != null) {
+			oneOf(vehicle, "controls", List.of("thrust", "drive"), "vehicle.controls");
+			if (vehicle.has("exhaust")) {
+				String fx = vehicle.get("exhaust").getAsString().replaceFirst("^custom:", "");
+				vehicle.addProperty("exhaust", fx);
+				if (!Effects.isEffect(CustomItems.DEFS.get(fx))) throw new ToolError("vehicle.exhaust: no effect " + fx + " (make it with define_effect first)");
+			}
 		}
 		JsonObject spawning = obj(props, "spawning");
 		if (spawning != null) {

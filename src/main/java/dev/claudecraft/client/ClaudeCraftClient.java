@@ -111,6 +111,7 @@ public class ClaudeCraftClient implements ClientModInitializer {
 			AnimatedBlocks.clear();
 			CustomEntityRenderer.PARTS.clear();
 			MorphLayer.PARSED.clear();
+			CustomParticle.releaseSprites();
 			Minecraft mc = Minecraft.getInstance();
 			if (mc.level != null) {
 				for (var e : mc.level.entitiesForRendering()) if (e instanceof CustomEntities.CustomEntity) e.refreshDimensions(); // new hitbox sizes

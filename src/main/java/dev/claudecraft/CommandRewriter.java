@@ -52,7 +52,7 @@ final class CommandRewriter {
 	private static final Set<String> DIMENSION_WORDS = Set.of("in");
 
 	static String rewrite(String cmd, Function<String, JsonObject> defs, Items items) {
-		if (!cmd.contains("custom:")) return cmd;
+		if (!cmd.contains("custom:")) return nbtStates(cmd);
 		StringBuilder out = new StringBuilder();
 		Matcher m = TOKEN.matcher(cmd);
 		int last = 0;
@@ -67,6 +67,13 @@ final class CommandRewriter {
 			}
 			String kind = def.has("kind") ? def.get("kind").getAsString() : "item";
 			String before = cmd.substring(0, m.start());
+
+			// A block named in NBT, like a falling block's BlockState:{Name:"custom:x"} (nbtStates then splits off its properties).
+			Matcher nbtName = NBT_NAME_BEFORE.matcher(before);
+			if (nbtName.find() && (kind.equals("block") || nbtName.group(1).equals("Name"))) {
+				out.append(kind.equals("block") ? items.blockState(def) : m.group());
+				continue;
+			}
 
 			// Inside a selector: type=custom:x or type=!custom:x.
 			Matcher sel = Pattern.compile("type\\s*=\\s*(!?)\\s*$").matcher(before);
@@ -119,7 +126,61 @@ final class CommandRewriter {
 			out.append(items.stack(def));
 		}
 		out.append(cmd, last, cmd.length());
+		return nbtStates(out.toString());
+	}
+
+	private static final Pattern NBT_NAME_BEFORE = Pattern.compile("(Name|id)\\s*:\\s*\"$");
+	private static final Pattern NBT_STATE_START = Pattern.compile("(BlockState|block_state)\\s*:\\s*\\{");
+	private static final Pattern NBT_INLINE = Pattern.compile("(id\\s*:\\s*\")([a-z0-9_.:/-]+)\\[([^\\]\"]*)]\"");
+
+	/**
+	 * Block states in NBT (a falling block's BlockState, a block display's block_state). Since 26.x they're
+	 * {id:"minecraft:oak_log",properties:{axis:"y"}}, but the older {Name:..,Properties:{..}} is what's natural to write, and
+	 * so is Name:"minecraft:oak_log[axis=y]". Vanilla reads either as nothing, and a falling block of nothing turns into
+	 * sand, so translate them.
+	 */
+	static String nbtStates(String cmd) {
+		Matcher m = NBT_STATE_START.matcher(cmd);
+		StringBuilder out = new StringBuilder();
+		int last = 0;
+		while (m.find(last)) {
+			int open = m.end() - 1, close = matchingBrace(cmd, open);
+			if (close < 0) break;
+			String inner = cmd.substring(open + 1, close)
+				.replaceAll("(^|[{,\\s])Name\\s*:", "$1id:")
+				.replaceAll("(^|[{,\\s])Properties\\s*:", "$1properties:");
+			Matcher p = NBT_INLINE.matcher(inner);
+			StringBuilder fixed = new StringBuilder();
+			while (p.find()) {
+				StringBuilder props = new StringBuilder();
+				for (String kv : p.group(3).split(",")) {
+					String[] e = kv.split("=", 2);
+					if (e.length != 2) continue;
+					if (!props.isEmpty()) props.append(',');
+					props.append(e[0].trim()).append(":\"").append(e[1].trim()).append('"');
+				}
+				p.appendReplacement(fixed, Matcher.quoteReplacement(p.group(1) + p.group(2) + "\",properties:{" + props + "}"));
+			}
+			p.appendTail(fixed);
+			out.append(cmd, last, open + 1).append(fixed).append('}');
+			last = close + 1;
+		}
+		out.append(cmd, last, cmd.length());
 		return out.toString();
+	}
+
+	/** The index of the brace closing the one at open, skipping quoted text; -1 if it's unbalanced. */
+	private static int matchingBrace(String s, int open) {
+		int depth = 0;
+		boolean quoted = false;
+		for (int i = open; i < s.length(); i++) {
+			char c = s.charAt(i);
+			if (c == '\\') i++;
+			else if (c == '"') quoted = !quoted;
+			else if (!quoted && c == '{') depth++;
+			else if (!quoted && c == '}' && --depth == 0) return i;
+		}
+		return -1;
 	}
 
 	/** The nearest command word before a position that tells what kind of argument follows. */
@@ -144,18 +205,18 @@ final class CommandRewriter {
 		Items stub = new Items() {
 			public String stack(JsonObject d) { return "STACK(" + d.get("id").getAsString() + ")"; }
 			public String predicate(JsonObject d) { return "PRED(" + d.get("id").getAsString() + ")"; }
-			public String blockState(JsonObject d) { return "STATE(" + d.get("id").getAsString() + ")"; }
+			public String blockState(JsonObject d) { return "claudecraft:custom_block[variant=7,light=0]"; }
 		};
 		String[][] cases = {
 			{"give @s custom:ruby 5", "give @s STACK(ruby) 5"},
 			{"/give @p custom:hippo", "/give @p STACK(hippo)"},
-			{"setblock ~ ~ ~ custom:ruby_ore", "setblock ~ ~ ~ STATE(ruby_ore)"},
-			{"fill ~ ~ ~ ~1 ~1 ~1 custom:ruby_ore replace minecraft:stone", "fill ~ ~ ~ ~1 ~1 ~1 STATE(ruby_ore) replace minecraft:stone"},
-			{"fill 0 0 0 1 1 1 minecraft:air replace custom:ruby_ore", "fill 0 0 0 1 1 1 minecraft:air replace STATE(ruby_ore)"},
+			{"setblock ~ ~ ~ custom:ruby_ore", "setblock ~ ~ ~ claudecraft:custom_block[variant=7,light=0]"},
+			{"fill ~ ~ ~ ~1 ~1 ~1 custom:ruby_ore replace minecraft:stone", "fill ~ ~ ~ ~1 ~1 ~1 claudecraft:custom_block[variant=7,light=0] replace minecraft:stone"},
+			{"fill 0 0 0 1 1 1 minecraft:air replace custom:ruby_ore", "fill 0 0 0 1 1 1 minecraft:air replace claudecraft:custom_block[variant=7,light=0]"},
 			{"give @s custom:ruby_ore", "give @s STACK(ruby_ore)"},
 			{"clear @s custom:ruby 1", "clear @s PRED(ruby) 1"},
 			{"execute if items entity @s weapon.mainhand custom:ruby run say hi", "execute if items entity @s weapon.mainhand PRED(ruby) run say hi"},
-			{"execute if block ~ ~-1 ~ custom:ruby_ore run give @s custom:ruby", "execute if block ~ ~-1 ~ STATE(ruby_ore) run give @s STACK(ruby)"},
+			{"execute if block ~ ~-1 ~ custom:ruby_ore run give @s custom:ruby", "execute if block ~ ~-1 ~ claudecraft:custom_block[variant=7,light=0] run give @s STACK(ruby)"},
 			{"summon custom:hippo", "summon claudecraft:custom_entity ~ ~ ~ {Definition:\"hippo\"}"},
 			{"summon custom:hippo ~ ~1 ~", "summon claudecraft:custom_entity ~ ~1 ~ {Definition:\"hippo\"}"},
 			{"summon custom:hippo ~ ~ ~ {CustomName:\"Bob\"}", "summon claudecraft:custom_entity ~ ~ ~ {Definition:\"hippo\",CustomName:\"Bob\"}"},
@@ -171,6 +232,14 @@ final class CommandRewriter {
 			{"give @s custom:moon", "give @s custom:moon"},
 			{"summon custom:black_hole ~ ~2 ~", "summon claudecraft:effect ~ ~2 ~ {Effect:\"black_hole\"}"},
 			{"kill @e[type=custom:black_hole]", "kill @e[type=claudecraft:effect,tag=custom.black_hole]"},
+			{"summon falling_block ~ ~5 ~ {BlockState:{Name:\"custom:ruby_ore\"}}", "summon falling_block ~ ~5 ~ {BlockState:{id:\"claudecraft:custom_block\",properties:{variant:\"7\",light:\"0\"}}}"},
+			{"summon falling_block ~ ~5 ~ {BlockState:{Name:\"minecraft:oak_log[axis=x]\"},Time:1}", "summon falling_block ~ ~5 ~ {BlockState:{id:\"minecraft:oak_log\",properties:{axis:\"x\"}},Time:1}"},
+			{"summon block_display ~ ~ ~ {block_state:{Name:\"minecraft:oak_stairs[facing=east, half=top]\"}}", "summon block_display ~ ~ ~ {block_state:{id:\"minecraft:oak_stairs\",properties:{facing:\"east\",half:\"top\"}}}"},
+			{"summon falling_block ~ ~ ~ {BlockState:{Name:\"minecraft:stone\"}}", "summon falling_block ~ ~ ~ {BlockState:{id:\"minecraft:stone\"}}"},
+			{"summon falling_block ~ ~ ~ {BlockState:{Name:\"minecraft:oak_log\",Properties:{axis:\"z\"}},CustomName:\"Name: x\"}", "summon falling_block ~ ~ ~ {BlockState:{id:\"minecraft:oak_log\",properties:{axis:\"z\"}},CustomName:\"Name: x\"}"},
+			{"summon falling_block ~ ~ ~ {BlockState:{id:\"custom:ruby_ore\"}}", "summon falling_block ~ ~ ~ {BlockState:{id:\"claudecraft:custom_block\",properties:{variant:\"7\",light:\"0\"}}}"},
+			{"summon falling_block ~ ~ ~ {BlockState:\"minecraft:stone\"}", "summon falling_block ~ ~ ~ {BlockState:\"minecraft:stone\"}"},
+			{"setblock ~ ~ ~ minecraft:oak_log[axis=x]", "setblock ~ ~ ~ minecraft:oak_log[axis=x]"},
 		};
 		int failed = 0;
 		for (String[] c : cases) {
