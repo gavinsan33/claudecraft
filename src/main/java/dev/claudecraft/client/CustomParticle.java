@@ -38,6 +38,9 @@ final class CustomParticle extends SingleQuadParticle {
 	private final List<TextureAtlasSprite> frames;
 	private final boolean blockChip;
 	private final float spinPerTick, uo, vo;
+	/** Claude's own sprite, if the part has one: its layer (texture) and which frame this particle shows. */
+	private final Layer own;
+	private int frame;
 
 	private CustomParticle(ClientLevel level, CustomParticles.Spec spec, Vec3 origin, Entity anchor, List<TextureAtlasSprite> frames, double[] v, double[] vel, int lifetime, int born) {
 		super(level, origin.x + v[CustomParticles.X], origin.y + v[CustomParticles.Y], origin.z + v[CustomParticles.Z], frames.getFirst());
@@ -60,7 +63,11 @@ final class CustomParticle extends SingleQuadParticle {
 		this.roll = this.oRoll = spinPerTick == 0 ? 0 : rnd.nextFloat() * (float) (Math.PI * 2);
 		this.uo = rnd.nextFloat() * 3;
 		this.vo = rnd.nextFloat() * 3;
-		if (spec.randomFrame) setSprite(frames.get(rnd.nextInt(frames.size())));
+		this.own = spec.spriteFrames == null ? null : spriteLayer(spec);
+		if (spec.randomFrame) {
+			if (own != null) frame = rnd.nextInt(spec.spriteFrames.length);
+			else setSprite(frames.get(rnd.nextInt(frames.size())));
+		}
 		appearance(0);
 	}
 
@@ -106,12 +113,38 @@ final class CustomParticle extends SingleQuadParticle {
 		setColor((c >> 16 & 0xFF) / 255f, (c >> 8 & 0xFF) / 255f, (c & 0xFF) / 255f);
 		setAlpha((c >>> 24) / 255f);
 		quadSize = spec.size(life) / 2;
-		if (!spec.randomFrame && frames.size() > 1) setSprite(frames.get(Math.min(frames.size() - 1, (int) (life * frames.size()))));
+		if (spec.randomFrame) return;
+		if (own != null) frame = Math.min(spec.spriteFrames.length - 1, (int) (life * spec.spriteFrames.length));
+		else if (frames.size() > 1) setSprite(frames.get(Math.min(frames.size() - 1, (int) (life * frames.size()))));
 	}
 
 	@Override
 	protected Layer getLayer() {
-		return blockChip ? Layer.TRANSLUCENT_TERRAIN : Layer.TRANSLUCENT;
+		return own != null ? own : blockChip ? Layer.TRANSLUCENT_TERRAIN : Layer.TRANSLUCENT;
+	}
+
+	// ---------------------------------------------------------------- Claude's own sprites
+
+	/** Uploaded sprites by spec: frames side by side in one small texture. Released when definitions change. */
+	private static final java.util.Map<CustomParticles.Spec, Layer> SPRITES = new java.util.IdentityHashMap<>();
+	private static int spriteCount;
+
+	private static Layer spriteLayer(CustomParticles.Spec spec) {
+		return SPRITES.computeIfAbsent(spec, s -> {
+			int w = s.spriteW, h = s.spriteH, n = s.spriteFrames.length;
+			var img = new com.mojang.blaze3d.platform.NativeImage(w * n, h, true);
+			for (int k = 0; k < n; k++) for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) img.setPixel(k * w + x, y, s.spriteFrames[k][y * w + x]);
+			Identifier id = Identifier.fromNamespaceAndPath("claudecraft", "particle_sprite/" + spriteCount++);
+			Minecraft.getInstance().getTextureManager().register(id, new net.minecraft.client.renderer.texture.DynamicTexture(() -> "claudecraft particle sprite", img));
+			return new Layer(true, id, Layer.TRANSLUCENT.pipeline(), Layer.TRANSLUCENT.oitPipelineSet());
+		});
+	}
+
+	/** Free the uploaded sprites (definitions changed, so their specs are rebuilt). Client thread. */
+	static void releaseSprites() {
+		var tm = Minecraft.getInstance().getTextureManager();
+		for (Layer l : SPRITES.values()) tm.release(l.textureAtlasLocation());
+		SPRITES.clear();
 	}
 
 	@Override
@@ -122,22 +155,22 @@ final class CustomParticle extends SingleQuadParticle {
 	// Block chips show a quarter of the block's texture, like vanilla breaking particles.
 	@Override
 	protected float getU0() {
-		return blockChip ? sprite.getU(uo / 4) : super.getU0();
+		return own != null ? (float) frame / spec.spriteFrames.length : blockChip ? sprite.getU(uo / 4) : super.getU0();
 	}
 
 	@Override
 	protected float getU1() {
-		return blockChip ? sprite.getU((uo + 1) / 4) : super.getU1();
+		return own != null ? (frame + 1f) / spec.spriteFrames.length : blockChip ? sprite.getU((uo + 1) / 4) : super.getU1();
 	}
 
 	@Override
 	protected float getV0() {
-		return blockChip ? sprite.getV(vo / 4) : super.getV0();
+		return own != null ? 0f : blockChip ? sprite.getV(vo / 4) : super.getV0();
 	}
 
 	@Override
 	protected float getV1() {
-		return blockChip ? sprite.getV((vo + 1) / 4) : super.getV1();
+		return own != null ? 1f : blockChip ? sprite.getV((vo + 1) / 4) : super.getV1();
 	}
 
 	// ---------------------------------------------------------------- emitting

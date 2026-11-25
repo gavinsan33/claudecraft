@@ -26,6 +26,7 @@ public final class CustomParticles {
 	public static final int X = 0, Y = 1, Z = 2, T = 3, I = 4, N = 5, AGE = 6, LIFE = 7, R1 = 8;
 	static final int MAX_BURST = 5000, MAX_RATE = 2000;
 	static final double MAX_LIFETIME = 30;
+	static final int MAX_SPRITE = 16, MAX_SPRITE_FRAMES = 16;
 
 	private static final Map<String, Spec> SPECS = new ConcurrentHashMap<>();
 
@@ -52,7 +53,7 @@ public final class CustomParticles {
 
 	/** Advice when a part tints an already colored sprite, which is why particles come out green instead of gold; or null. */
 	static String tintWarning(JsonObject p) {
-		if (!p.has("colors") && !p.has("color")) return null;
+		if (p.has("sprite") || !p.has("colors") && !p.has("color")) return null;
 		String tex = p.has("texture") ? p.get("texture").getAsString().replaceFirst("^minecraft:", "") : "generic";
 		String family = tex.replaceFirst("_\\d+$", "");
 		String color = PRECOLORED.get(family);
@@ -63,6 +64,9 @@ public final class CustomParticles {
 	public static final class Spec {
 		/** A particle sprite name (minecraft:big_smoke) or block:<block id>. */
 		public final String texture;
+		/** Claude's own pixel-art sprite: ARGB pixels per frame (row by row), or null to use texture. */
+		public final int[][] spriteFrames;
+		public final int spriteW, spriteH;
 		public final boolean randomFrame, emissive, collide, trail;
 		private final int[] colors;
 		private final float[] sizes;
@@ -82,6 +86,45 @@ public final class CustomParticles {
 				if (!tex.contains(":")) tex = "minecraft:" + tex;
 			}
 			texture = tex;
+			if (d.has("sprite")) {
+				JsonObject s = d.getAsJsonObject("sprite");
+				Map<Integer, Integer> palette = new java.util.HashMap<>();
+				if (s.has("palette")) for (var e : s.getAsJsonObject("palette").entrySet()) {
+					if (e.getKey().codePointCount(0, e.getKey().length()) != 1) throw new IllegalArgumentException("sprite palette keys are single characters");
+					palette.put(e.getKey().codePointAt(0), VoxelModel.color(e.getValue().getAsString()));
+				}
+				JsonArray frames = new JsonArray();
+				if (s.has("frames")) frames = s.getAsJsonArray("frames");
+				else if (s.has("pixels")) frames.add(s.getAsJsonArray("pixels"));
+				if (frames.isEmpty() || frames.size() > MAX_SPRITE_FRAMES) throw new IllegalArgumentException("sprite needs pixels, or 1 to " + MAX_SPRITE_FRAMES + " frames");
+				int w = 0, h = 0;
+				for (JsonElement f : frames) {
+					h = Math.max(h, f.getAsJsonArray().size());
+					for (JsonElement row : f.getAsJsonArray()) w = Math.max(w, row.getAsString().codePointCount(0, row.getAsString().length()));
+				}
+				if (w == 0 || h == 0 || w > MAX_SPRITE || h > MAX_SPRITE) throw new IllegalArgumentException("sprite frames are 1 to " + MAX_SPRITE + " pixels per side");
+				spriteW = w;
+				spriteH = h;
+				spriteFrames = new int[frames.size()][w * h];
+				for (int k = 0; k < frames.size(); k++) {
+					JsonArray rows = frames.get(k).getAsJsonArray();
+					for (int y = 0; y < rows.size(); y++) {
+						String row = rows.get(y).getAsString();
+						int x = 0;
+						for (int i = 0; i < row.length(); x++) {
+							int cp = row.codePointAt(i);
+							i += Character.charCount(cp);
+							if (cp == '.' || cp == ' ') continue;
+							Integer c = palette.get(cp);
+							if (c == null) throw new IllegalArgumentException("sprite: '" + new String(Character.toChars(cp)) + "' isn't in its palette");
+							spriteFrames[k][y * w + x] = c;
+						}
+					}
+				}
+			} else {
+				spriteFrames = null;
+				spriteW = spriteH = 0;
+			}
 			randomFrame = d.has("frames") && d.get("frames").getAsString().equals("random");
 			emissive = d.has("emissive") && d.get("emissive").getAsBoolean();
 			collide = d.has("collide") && d.get("collide").getAsBoolean();
