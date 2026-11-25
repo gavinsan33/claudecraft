@@ -515,6 +515,7 @@ public class GameTools implements McpServer.Tools {
 				      }},
 				      "color":{"type":"string","description":"#RRGGBB tint for the leather look; default is the model's average color."}}},
 				    "shoot":%s,
+				    "storage":{"type":"integer","description":"Rows of inventory it holds, 1 to 6 (9 slots each): a backpack, pouch, quiver, lunchbox, toolbelt. Right-click opens it; its contents stay inside the item, travel with it and show in its tooltip; it can't hold other storage items or shulker boxes. Makes it unstackable. Wearable ones (armor with worn parts, e.g. a backpack on the chest slot) are put on from the inventory screen, since right-click opens them."},
 				    "use_commands":{"type":"array","items":{"type":"string"},"description":"Run as the player on right-click (or when eaten, for food). @s is the player, ~ ~ ~ their position."},
 				    "use_on_block_commands":{"type":"array","items":{"type":"string"},"description":"Run as the player when they right-click a block with it; ~ ~ ~ is the block."},
 				    "use_on_entity_commands":{"type":"array","items":{"type":"string"},"description":"Run as the player when they right-click a creature with it; @target is the creature, ~ ~ ~ its position."},
@@ -1865,6 +1866,11 @@ public class GameTools implements McpServer.Tools {
 		}
 		JsonObject props = args.has("properties") ? args.getAsJsonObject("properties") : new JsonObject();
 		oneOf(props, "rarity", List.of("common", "uncommon", "rare", "epic"), "rarity");
+		if (props.has("storage")) {
+			int rows = props.get("storage").getAsInt();
+			if (rows < 1 || rows > 6) throw new ToolError("storage is 1 to 6 rows");
+			if (props.has("food")) throw new ToolError("storage items can't also be food (right-click opens them)");
+		}
 		JsonObject tool = obj(props, "tool");
 		if (tool != null) {
 			oneOf(tool, "type", CustomItems.TOOL_TYPES, "tool.type");

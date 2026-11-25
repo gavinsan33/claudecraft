@@ -362,6 +362,7 @@ public final class CustomItems {
 		JsonObject p = props(def);
 		int maxStack = p.has("max_stack") ? Math.max(1, Math.min(99, p.get("max_stack").getAsInt())) : 64;
 		boolean durable = p.has("durability");
+		if (ItemStorage.rows(def) > 0) maxStack = 1; // its contents live in the stack
 		if (durable) {
 			maxStack = 1;
 			s.set(DataComponents.MAX_DAMAGE, Math.max(1, p.get("durability").getAsInt()));
@@ -613,6 +614,11 @@ public final class CustomItems {
 			// Food is eaten the vanilla way; its commands run once it's finished (see finishUsingItem).
 			// Armor is put on the vanilla way too, unless it also does something on right-click.
 			if (p.has("food")) return super.use(level, player, hand);
+			if (ItemStorage.rows(def) > 0) {
+				// Storage opens on right-click (wear a wearable bag by putting it in its armor slot).
+				if (!level.isClientSide() && player instanceof ServerPlayer sp) ItemStorage.open(sp, hand, stack, def);
+				return InteractionResult.SUCCESS;
+			}
 			List<String> cmds = strings(p, "use_commands");
 			boolean shoots = p.has("shoot");
 			if (cmds.isEmpty() && !shoots) return super.use(level, player, hand);
