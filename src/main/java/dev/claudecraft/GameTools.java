@@ -362,7 +362,8 @@ public class GameTools implements McpServer.Tools {
 			"Fill every block in a box where a math expression is true (WorldEdit //generate). Variables: x, y, z run from "
 				+ "-1 to 1 across the box (0 = its center); bx, by, bz are block offsets from the minimum corner; sx, sy, sz are "
 				+ "the box size. Operators + - * / % ^, < <= > >= == !=, && || !, functions abs sqrt sin cos tan asin acos atan "
-				+ "atan2 min max floor ceil round sign exp log pow hypot, constants pi and e. Examples: a tapering curved tower "
+				+ "atan2 min max floor ceil round sign exp log pow hypot clamp lerp, noise(x[,y[,z]]) (smooth noise, about -1 to 1, for "
+				+ "natural, irregular shapes: rocky outcrops, ragged cliffs, uneven paths) and rand() (0 to 1, different per block), constants pi and e. Examples: a tapering curved tower "
 				+ "leg \"abs(x) + abs(z) < (1 - (y+1)/2)^2 * 0.9\", a twisted spire, a wavy wall, an arch. Use it for curves the "
 				+ "other tools can't express." + QUEUED,
 			"""
