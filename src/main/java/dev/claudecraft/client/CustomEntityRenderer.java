@@ -28,6 +28,8 @@ public class CustomEntityRenderer extends EntityRenderer<CustomEntities.CustomEn
 		String definition = "";
 		float width = 0.5f;
 		boolean airborne;
+		/** A vehicle's lean in degrees, and the height (blocks) it leans around. */
+		float roll, lean, leanAt;
 		boolean sitting;
 		/** Size scale: babies are half size. */
 		float scale = 1;
@@ -55,6 +57,9 @@ public class CustomEntityRenderer extends EntityRenderer<CustomEntities.CustomEn
 		s.hasRedOverlay = e.hurtTime > 0 || e.deathTime > 0;
 		s.width = e.getBbWidth();
 		s.airborne = !e.onGround() && !e.isPassenger();
+		s.roll = Mth.lerp(pt, e.rollO, e.roll);
+		s.lean = Mth.lerp(pt, e.leanO, e.lean);
+		s.leanAt = e.getBbHeight() / 2;
 		s.sitting = e.isInSittingPose();
 		s.scale = e.getScale() * e.getAgeScale();
 	}
@@ -70,6 +75,13 @@ public class CustomEntityRenderer extends EntityRenderer<CustomEntities.CustomEn
 		int overlay = net.minecraft.client.renderer.entity.LivingEntityRenderer.getOverlayCoords(s, 0);
 		pose.pushPose();
 		pose.rotateDegrees(Axis.YP, (-s.bodyRot)); // the model's front (+z) faces where the creature faces
+		if (s.roll != 0 || s.lean != 0) {
+			// Vehicles bank toward where they drift and tip toward where they're going, around their middle.
+			pose.translate(0, s.leanAt, 0);
+			pose.rotateDegrees(Axis.ZP, s.roll);
+			pose.rotateDegrees(Axis.XP, s.lean);
+			pose.translate(0, -s.leanAt, 0);
+		}
 		pose.scale(s.scale, s.scale, s.scale);
 		if (s.sitting && model != null) {
 			pose.translate(0, -model.height() * 0.2f, 0); // settle down; legs stay still

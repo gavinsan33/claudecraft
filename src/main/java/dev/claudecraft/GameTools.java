@@ -658,6 +658,16 @@ public class GameTools implements McpServer.Tools {
 				    "tame":{"type":"object","description":"Make it tamable: feed it these until it's tamed (chance per item, default 0.33).","properties":{
 				      "items":{"type":"array","items":{"type":"string"}},"chance":{"type":"number"}}},
 				    "rideable":{"type":"boolean","description":"Players (its owner, if tamable) ride it by right-clicking; it goes where they look. Flying mounts climb with jump."},
+				    "vehicle":{"type":"object","description":"Make it a vehicle instead of a creature: no AI (it never wanders, flees or fights), players get in by right-clicking and drive it, and it moves with its own physics. thrust controls are for rockets, jetpacks, hover-bikes, spaceships and hot-air balloons: hold jump to thrust up, W/A/S/D push it forward, left, back and right, it turns to face where the rider looks, gravity pulls it back down and it leans the way it moves. drive controls are for cars, karts, tractors and buggies: W/S drive and reverse, A/D steer, it stays on the ground and climbs single blocks.","properties":{
+				      "controls":{"type":"string","enum":["thrust","drive"]},
+				      "max_speed":{"type":"number","description":"Blocks per second. Default 12 (thrust) or 10 (drive); a sprinting player is about 6."},
+				      "acceleration":{"type":"number","description":"How fast WASD speed it up, blocks per second squared. Default 12 (thrust) or 8 (drive)."},
+				      "thrust":{"type":"number","description":"thrust: upward push while holding jump, blocks per second squared. Default 28; it must beat gravity to climb."},
+				      "gravity":{"type":"number","description":"Blocks per second squared. Default 16 (thrust: it sinks back down when you let go) or 32 (drive); 0 makes a thrust vehicle hover."},
+				      "tilt":{"type":"number","description":"Degrees it leans at top speed: banks toward where it drifts, tips toward where it's going. Default 25 (thrust) or 0 (drive)."},
+				      "turn":{"type":"number","description":"thrust: how quickly it turns to where the rider looks, 0 to 1 (default 0.15). drive: degrees per tick at speed (default 4)."},
+				      "exhaust":{"type":"string","description":"An effect (from define_effect) played under it while the rider thrusts (thrust) or presses forward (drive): flames, smoke. Make it short (0.2 to 0.4 seconds, it repeats) with trail: true particles so the smoke stays behind."},
+				      "exhaust_at":{"type":"array","items":{"type":"number"},"description":"Where the exhaust comes out, in the model's voxels (default 0 0 0, the bottom center); e.g. 0 2 -10 for a car's tailpipe."}}},
 				    "ranged":{"type":"object","description":"Attack from range instead of melee (neutral or hostile).","properties":{
 				      "projectile":{"type":"string","description":"beam (instant ray), arrow, fireball, small_fireball, wind_charge, or an item id like minecraft:snowball or custom:<id> that flies as that item."},
 				      "effect":{"type":"string","description":"Effect drawn along a beam, or carried by a flying item."},"hit_effect":{"type":"string"},
@@ -1987,6 +1997,15 @@ public class GameTools implements McpServer.Tools {
 			String bad = CustomProjectiles.validate(ranged);
 			if (bad != null) throw new ToolError(bad);
 			checkEffects(ranged);
+		}
+		JsonObject vehicle = obj(props, "vehicle");
+		if (vehicle != null) {
+			oneOf(vehicle, "controls", List.of("thrust", "drive"), "vehicle.controls");
+			if (vehicle.has("exhaust")) {
+				String fx = vehicle.get("exhaust").getAsString().replaceFirst("^custom:", "");
+				vehicle.addProperty("exhaust", fx);
+				if (!Effects.isEffect(CustomItems.DEFS.get(fx))) throw new ToolError("vehicle.exhaust: no effect " + fx + " (make it with define_effect first)");
+			}
 		}
 		JsonObject spawning = obj(props, "spawning");
 		if (spawning != null) {

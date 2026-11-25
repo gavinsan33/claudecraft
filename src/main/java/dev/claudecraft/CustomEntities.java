@@ -224,7 +224,99 @@ public final class CustomEntities {
 
 		boolean rideable() {
 			JsonObject p = props();
-			return p.has("rideable") && p.get("rideable").getAsBoolean();
+			return p.has("rideable") && p.get("rideable").getAsBoolean() || vehicle() != null;
+		}
+
+		// ------------------------------------------------------------ vehicles
+
+		/** The vehicle settings, or null for an ordinary creature. A vehicle has no AI and moves only as its rider drives it. */
+		JsonObject vehicle() {
+			JsonObject p = props();
+			return p.has("vehicle") && p.get("vehicle").isJsonObject() ? p.getAsJsonObject("vehicle") : null;
+		}
+
+		/** thrust: jump pushes it up, WASD push it around, it turns to where the rider looks. drive: W/S drive, A/D steer. */
+		private static boolean thrust(JsonObject v) {
+			return !v.has("controls") || !v.get("controls").getAsString().equals("drive");
+		}
+
+		private static double vnum(JsonObject v, String key, double dflt) {
+			return v.has(key) ? v.get(key).getAsDouble() : dflt;
+		}
+
+		/** Top speed in blocks per tick. */
+		private static double maxSpeed(JsonObject v) {
+			return Math.max(0.5, Math.min(60, vnum(v, "max_speed", thrust(v) ? 12 : 10))) / 20;
+		}
+
+		/** How far it leans (degrees, client side): roll toward where it drifts sideways, pitch toward where it's going. */
+		public float roll, rollO, lean, leanO;
+
+		private void updateLean() {
+			rollO = roll;
+			leanO = lean;
+			JsonObject v = vehicle();
+			float r = 0, l = 0;
+			if (v != null) {
+				float tilt = (float) vnum(v, "tilt", thrust(v) ? 25 : 0);
+				double max = maxSpeed(v), dx = getX() - xo, dz = getZ() - zo, yaw = getYRot() * Mth.DEG_TO_RAD;
+				double forward = -dx * Math.sin(yaw) + dz * Math.cos(yaw), right = -dx * Math.cos(yaw) - dz * Math.sin(yaw);
+				r = (float) Mth.clamp(right / max, -1, 1) * tilt;
+				l = (float) Mth.clamp(forward / max, -1, 1) * tilt;
+			}
+			roll += (r - roll) * 0.25f;
+			lean += (l - lean) * 0.25f;
+		}
+
+		@Override
+		public void tick() {
+			super.tick();
+			if (level().isClientSide()) updateLean(); // from how it actually moved, so every player sees the same lean
+		}
+
+		/** A vehicle's own physics: thrust or engine from its rider, gravity, drag, and tyres that grip. */
+		private void vehicleTravel(JsonObject v, Vec3 input) {
+			boolean thrust = thrust(v), driven = getControllingPassenger() instanceof Player;
+			double max = maxSpeed(v), accel = vnum(v, "acceleration", thrust ? 12 : 8) / 400, gravity = vnum(v, "gravity", thrust ? 16 : 32) / 400;
+			if (driven) {
+				if (thrust) moveRelative((float) accel, new Vec3(input.x, 0, input.z));
+				else if (onGround()) moveRelative((float) accel, new Vec3(0, 0, input.z < 0 ? input.z * 0.5 : input.z));
+			}
+			Vec3 vel = getDeltaMovement();
+			if (driven && thrust && input.y > 0) vel = vel.add(0, vnum(v, "thrust", 28) / 400, 0);
+			vel = vel.add(0, -gravity, 0);
+			if (thrust) {
+				vel = new Vec3(vel.x * 0.95, vel.y * 0.98, vel.z * 0.95); // air drag
+			} else {
+				// Tyres: keep speed along the way it faces, lose most of any slide; coast to a stop without the pedal.
+				Vec3 f = Vec3.directionFromRotation(0, getYRot());
+				double along = vel.x * f.x + vel.z * f.z;
+				double keep = !onGround() ? 0.99 : driven && input.z != 0 ? 0.98 : 0.9;
+				vel = new Vec3(f.x * along * keep + (vel.x - f.x * along) * 0.3, vel.y, f.z * along * keep + (vel.z - f.z * along) * 0.3);
+			}
+			double h = Math.sqrt(vel.x * vel.x + vel.z * vel.z);
+			if (h > max) vel = new Vec3(vel.x * max / h, vel.y, vel.z * max / h);
+			vel = new Vec3(vel.x, Mth.clamp(vel.y, -3, max), vel.z);
+			setDeltaMovement(vel);
+			move(net.minecraft.world.entity.MoverType.SELF, vel);
+			calculateEntityAnimation(false);
+		}
+
+		/** While its rider thrusts (jump) or drives (forward), play its exhaust effect under it. Server thread. */
+		private void exhaust(ServerLevel level, JsonObject v) {
+			if (!v.has("exhaust") || tickCount % 4 != 0 || !(getControllingPassenger() instanceof ServerPlayer rider)) return;
+			var in = rider.getLastClientInput();
+			if (!(thrust(v) ? in.jump() : in.forward())) return;
+			JsonObject fx = CustomItems.DEFS.get(v.get("exhaust").getAsString());
+			if (!Effects.isEffect(fx)) return;
+			float[] at = {0, 0, 0};
+			if (v.has("exhaust_at") && v.get("exhaust_at").isJsonArray()) {
+				var a = v.getAsJsonArray("exhaust_at");
+				for (int k = 0; k < 3 && k < a.size(); k++) at[k] = a.get(k).getAsFloat();
+			}
+			float scale = definition().has("scale") ? definition().get("scale").getAsFloat() : 16;
+			Vec3 from = position().add(new Vec3(at[0] / scale, at[1] / scale, at[2] / scale).yRot(-getYRot() * Mth.DEG_TO_RAD));
+			Effects.play(level, fx, from, from, rider, this);
 		}
 
 		/** Set the definition and apply its stats. fresh: also fill health to the new maximum. */
@@ -265,8 +357,22 @@ public final class CustomEntities {
 						navigation = new GroundPathNavigation(this, level());
 					}
 				}
-				setNoGravity(move.equals("fly"));
 				setPathfindingMalus(PathType.WATER, move.equals("swim") ? 0 : 8);
+			}
+			boolean vehicle = vehicle() != null;
+			setNoGravity(vehicle || move.equals("fly")); // vehicles do their own gravity
+			if (!level().isClientSide()) {
+				// No AI at all for vehicles: they don't wander, flee, fight or look around.
+				for (Goal.Flag f : Goal.Flag.values()) {
+					if (vehicle) {
+						goalSelector.disableControlFlag(f);
+						targetSelector.disableControlFlag(f);
+					} else {
+						goalSelector.enableControlFlag(f);
+						targetSelector.enableControlFlag(f);
+					}
+				}
+				getAttribute(Attributes.STEP_HEIGHT).setBaseValue(vehicle && !thrust(vehicle()) ? 1.0 : 0.6); // cars drive up blocks
 			}
 		}
 
@@ -445,6 +551,22 @@ public final class CustomEntities {
 		@Override
 		protected void tickRidden(Player controller, Vec3 input) {
 			super.tickRidden(controller, input);
+			JsonObject v = vehicle();
+			if (v != null) {
+				float yRot = getYRot();
+				if (thrust(v)) {
+					yRot += Mth.wrapDegrees(controller.getYRot() - yRot) * (float) Mth.clamp(vnum(v, "turn", 0.15), 0, 1);
+				} else if (isLocalInstanceAuthoritative()) {
+					// Steer with A/D, more as it speeds up, and the other way in reverse, like a car.
+					Vec3 f = Vec3.directionFromRotation(0, yRot), vel = getDeltaMovement();
+					double along = vel.x * f.x + vel.z * f.z;
+					double grip = Math.min(1, Math.abs(along) / (maxSpeed(v) * 0.3));
+					yRot -= (float) (input.x * vnum(v, "turn", 4) * grip * Math.signum(along));
+				}
+				setRot(yRot, 0);
+				yBodyRot = yHeadRot = yRot;
+				return;
+			}
 			float yRot = getYRot() + Mth.wrapDegrees(controller.getYRot() - getYRot()) * (flying() ? 0.15f : 0.5f);
 			setRot(yRot, controller.getXRot() * 0.5f);
 			yRotO = yBodyRot = yHeadRot = yRot;
@@ -452,6 +574,7 @@ public final class CustomEntities {
 
 		@Override
 		protected Vec3 getRiddenInput(Player controller, Vec3 selfInput) {
+			if (vehicle() != null) return new Vec3(controller.xxa, controller.isJumping() ? 1 : 0, controller.zza); // raw keys
 			float strafe = controller.xxa * 0.5f, forward = controller.zza;
 			if (forward < 0) forward *= 0.25f;
 			if (flying() || swimming() && isInWater()) {
@@ -473,6 +596,11 @@ public final class CustomEntities {
 
 		@Override
 		public void travel(Vec3 input) {
+			JsonObject v = vehicle();
+			if (v != null) {
+				vehicleTravel(v, input);
+				return;
+			}
 			if (flying() && getControllingPassenger() instanceof Player) {
 				travelFlying(input, getRiddenSpeed((Player) getControllingPassenger()));
 				return;
@@ -516,6 +644,7 @@ public final class CustomEntities {
 			if (movement().equals("hop") && onGround() && (navigation.isInProgress() || getControllingPassenger() != null && getDeltaMovement().horizontalDistanceSqr() > 1e-4)) {
 				jumpControl.jump();
 			}
+			if (vehicle() != null) exhaust(level, vehicle());
 			JsonObject p = props();
 			if (!p.has("abilities") || !p.get("abilities").isJsonArray()) return;
 			int i = 0;
@@ -583,7 +712,7 @@ public final class CustomEntities {
 
 		@Override
 		public boolean causeFallDamage(double distance, float multiplier, DamageSource source) {
-			return !flying() && !movement().equals("hop") && super.causeFallDamage(distance, multiplier, source);
+			return !flying() && !movement().equals("hop") && vehicle() == null && super.causeFallDamage(distance, multiplier, source);
 		}
 
 		private SoundEvent sound(String kind) {
