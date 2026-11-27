@@ -182,7 +182,15 @@ public final class MorphLayer extends RenderLayer<AvatarRenderState, PlayerModel
 
 	/** Morphed players wear no visible armor, head items, elytra, cape or wearables: they'd sit where the vanilla body was. */
 	public static void stripEquipment(net.minecraft.world.entity.Entity player, AvatarRenderState s) {
-		if (Morphs.of(player) == null) return;
+		if (player.getVehicle() instanceof dev.claudecraft.CustomEntities.CustomEntity v && v.hidesRiders()) {
+			// Inside a closed cockpit: not drawn at all, nor what they hold or wear, nor their name.
+			s.isInvisible = true;
+			s.rightHandItemState.clear();
+			s.leftHandItemState.clear();
+			s.nameTag = null;
+		} else if (Morphs.of(player) == null) {
+			return;
+		}
 		s.headEquipment = s.chestEquipment = s.legsEquipment = s.feetEquipment = net.minecraft.world.item.ItemStack.EMPTY;
 		s.headItem.clear();
 		s.wornHeadType = null;

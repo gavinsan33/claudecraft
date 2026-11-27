@@ -279,8 +279,46 @@ public final class CustomEntities {
 			return Math.max(0.5, Math.min(60, vnum(v, "max_speed", thrust(v) ? 12 : 10))) / 20;
 		}
 
+		/** A vehicle's seats in its model's voxels (x left, y up from its feet, z forward); the first is the driver's. Empty: vanilla's one on top. */
+		List<float[]> seats() {
+			JsonObject v = vehicle();
+			List<float[]> out = new ArrayList<>();
+			if (v == null || !v.has("seats") || !v.get("seats").isJsonArray()) return out;
+			for (JsonElement e : v.getAsJsonArray("seats")) {
+				var a = e.getAsJsonArray();
+				out.add(new float[]{a.get(0).getAsFloat(), a.get(1).getAsFloat(), a.get(2).getAsFloat()});
+			}
+			return out;
+		}
+
+		/** Whether its riders are hidden, like a pilot inside a closed cockpit or a tank. */
+		public boolean hidesRiders() {
+			JsonObject v = vehicle();
+			return v != null && v.has("hide_riders") && v.get("hide_riders").getAsBoolean();
+		}
+
+		@Override
+		protected Vec3 getPassengerAttachmentPoint(Entity passenger, EntityDimensions dims, float scale) {
+			List<float[]> seats = seats();
+			int i = getPassengers().indexOf(passenger);
+			if (seats.isEmpty() || i < 0 || i >= seats.size()) return super.getPassengerAttachmentPoint(passenger, dims, scale);
+			float voxels = definition().has("scale") ? definition().get("scale").getAsFloat() : 16;
+			float[] s = seats.get(i);
+			// Where the rider sits (about their hips), turning with the vehicle.
+			return new Vec3(s[0] / voxels, s[1] / voxels, s[2] / voxels).scale(scale).yRot(-getYRot() * Mth.DEG_TO_RAD);
+		}
+
+		@Override
+		protected boolean canAddPassenger(Entity passenger) {
+			List<float[]> seats = seats();
+			return seats.isEmpty() ? super.canAddPassenger(passenger) : getPassengers().size() < seats.size();
+		}
+
 		/** How far it leans (degrees, client side): roll toward where it drifts sideways, pitch toward where it's going. */
 		public float roll, rollO, lean, leanO;
+		/** For wheels, steering and propellers (client side): blocks rolled forward, steering angle (degrees), spin (radians). */
+		public float rolled, rolledO, steer, steerO, spin, spinO;
+		private float lastYaw = Float.NaN;
 
 		private void updateLean() {
 			rollO = roll;
@@ -551,7 +589,8 @@ public final class CustomEntities {
 				}
 			}
 			boolean mayControl = !tameable() || isOwnedBy(player);
-			if (rideable() && mayControl && !isBaby() && !isVehicle() && !player.isSecondaryUseActive()) {
+			boolean seatFree = isVehicle() ? canAddPassenger(player) && !hasPassenger(player) : true;
+			if (rideable() && (mayControl || isVehicle()) && !isBaby() && seatFree && !player.isSecondaryUseActive()) {
 				if (!level().isClientSide()) {
 					setOrderedToSit(false);
 					setInSittingPose(false);
