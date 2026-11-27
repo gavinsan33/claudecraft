@@ -75,8 +75,9 @@ public class CustomVehiclesClientTest implements FabricClientGameTest {
 					"{\"controls\":\"thrust\",\"exhaust\":\"rocket_flames\"}"));
 				JsonArray car = new JsonArray();
 				car.add(part("body", -6, 3, -10, box(12, 6, 20, 'b')));
-				for (int[] w : new int[][]{{-7, -8}, {5, -8}, {-7, 4}, {5, 4}}) car.add(part("body", w[0], 0, w[1], box(2, 4, 4, 'k')));
-				CustomItems.define(server, creature("car", "{\"b\":\"#2A5BD7\",\"k\":\"#181818\"}", car, "{\"controls\":\"drive\",\"max_speed\":10}"));
+				for (int[] w : new int[][]{{-7, -8}, {5, -8}, {-7, 4}, {5, 4}}) car.add(part(w[1] > 0 ? "front_wheel" : "wheel", w[0], 0, w[1], box(2, 4, 4, 'k')));
+				CustomItems.define(server, creature("car", "{\"b\":\"#2A5BD7\",\"k\":\"#181818\"}", car,
+					"{\"controls\":\"drive\",\"max_speed\":10,\"seats\":[[3,5,0],[-3,5,0]]}"));
 
 				var level = server.overworld();
 				int y = level.getChunk(0, 0).getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING, 0, 0) + 1;
@@ -126,6 +127,25 @@ public class CustomVehiclesClientTest implements FabricClientGameTest {
 				player.startRiding(c);
 			});
 			ctx.waitTicks(20);
+			// Seats: the driver sits in the first (3 voxels to the car's left, 5 up), one passenger fits, a third doesn't.
+			String seated = sp.getServer().computeOnServer(server -> {
+				var level = server.overworld();
+				var player = server.getPlayerList().getPlayers().getFirst();
+				var c = (CustomEntities.CustomEntity) player.getVehicle();
+				var seat = new net.minecraft.world.phys.Vec3(3 / 16.0, 5 / 16.0, 0).yRot(-c.getYRot() * net.minecraft.util.Mth.DEG_TO_RAD);
+				double off = player.position().subtract(c.position()).subtract(seat).horizontalDistance();
+				var p1 = net.minecraft.world.entity.EntityTypes.PIG.create(level, net.minecraft.world.entity.EntitySpawnReason.COMMAND);
+				var p2 = net.minecraft.world.entity.EntityTypes.PIG.create(level, net.minecraft.world.entity.EntitySpawnReason.COMMAND);
+				p1.snapTo(c.position());
+				p2.snapTo(c.position());
+				level.addFreshEntity(p1);
+				level.addFreshEntity(p2);
+				boolean second = p1.startRiding(c), third = p2.startRiding(c);
+				p1.stopRiding();
+				return (off > 0.2 ? "driver isn't in the first seat (" + off + " off); " : "") + (!second ? "a passenger should fit in the second seat; " : "")
+					+ (third ? "a third rider shouldn't fit in two seats; " : "");
+			});
+			if (!seated.isEmpty()) throw new AssertionError(seated);
 			double[] park = pos(ctx);
 			ctx.getInput().holdKey(o -> o.keyUp);
 			ctx.waitTicks(40);
@@ -136,6 +156,8 @@ public class CustomVehiclesClientTest implements FabricClientGameTest {
 			double yaw = Math.toRadians(park[4]), dx = drove[0] - park[0], dz = drove[2] - park[2];
 			double ahead = -dx * Math.sin(yaw) + dz * Math.cos(yaw), aside = dx * Math.cos(yaw) + dz * Math.sin(yaw);
 			if (ahead < 4) throw new AssertionError("holding W should drive forward: " + ahead + " blocks ahead");
+			float rolled = ctx.computeOnClient(mc -> ((CustomEntities.CustomEntity) mc.player.getVehicle()).rolled);
+			if (Math.abs(rolled - ahead) > 1.5) throw new AssertionError("the wheels should roll as far as the car drove: rolled " + rolled + ", drove " + ahead);
 			if (Math.abs(aside) > 1) throw new AssertionError("without A/D it should drive straight, drifted " + aside);
 			if (Math.abs(drove[1] - park[1]) > 0.6) throw new AssertionError("the car should stay on the ground: " + park[1] + " -> " + drove[1]);
 		}

@@ -655,7 +655,7 @@ public class GameTools implements McpServer.Tools {
 			"Create a custom creature, or update one by reusing its id (creatures already spawned change too). Build it from "
 				+ "voxel parts that are animated by role: body (still), head (turns to look around), leg (swings while walking; "
 				+ "legs with the same phase move together, so give four legs diagonal pairs), arm (swings opposite the legs), "
-				+ "wing (flaps), tail (sways), none (still). Coordinates are voxels in the creature's own space: x = 0, z = 0 "
+				+ "wing (flaps), tail (sways), and for vehicles wheel (rolls as far as it travels, backwards in reverse), front_wheel (rolls and turns with the steering), propeller (spins about the way it faces) and rotor (spins flat, like a helicopter's), which turn about their center by default; none (still). Coordinates are voxels in the creature's own space: x = 0, z = 0 "
 				+ "is its center, y = 0 its feet, +z is the way it faces (its front) and +x its left side. Each part has "
 				+ "layers (place_blueprint format: layers bottom to top, rows along +z, characters along +x), origin (where "
 				+ "its layers start: the minimum corner) and pivot (the point it rotates around: a hip, shoulder, neck or wing "
@@ -673,7 +673,7 @@ public class GameTools implements McpServer.Tools {
 				  "palette":{"type":"object","additionalProperties":{"type":"string"}},
 				  "parts":{"type":"array","items":{"type":"object","properties":{
 				    "name":{"type":"string"},
-				    "role":{"type":"string","enum":["body","head","leg","arm","wing","tail","none"]},
+				    "role":{"type":"string","enum":["body","head","leg","arm","wing","tail","wheel","front_wheel","propeller","rotor","none"]},
 				    "origin":{"type":"array","items":{"type":"integer"}},
 				    "pivot":{"type":"array","items":{"type":"number"}},
 				    "phase":{"type":"integer","description":"legs and arms: 0 or 1."},
@@ -701,6 +701,8 @@ public class GameTools implements McpServer.Tools {
 				      "tilt":{"type":"number","description":"Degrees it leans at top speed: banks toward where it drifts, tips toward where it's going. Default 25 (thrust) or 0 (drive)."},
 				      "turn":{"type":"number","description":"thrust: how quickly it turns to where the rider looks, 0 to 1 (default 0.15). drive: degrees per tick at speed (default 4)."},
 				      "exhaust":{"type":"string","description":"An effect (from define_effect) played under it while the rider thrusts (thrust) or presses forward (drive): flames, smoke. Make it short (0.2 to 0.4 seconds, it repeats) with trail: true particles so the smoke stays behind."},
+				      "seats":{"type":"array","items":{"type":"array","items":{"type":"number"}},"description":"Where riders sit, in the model's voxels (x left, y up from its feet, z forward), each about where a rider's hips go: the first is the driver's, the rest passengers' (a car with four seats carries four). Default: one rider on top of it."},
+				      "hide_riders":{"type":"boolean","description":"Hide riders entirely, for closed cockpits, tanks and submarines, so they don't show through the walls."},
 				      "exhaust_at":{"type":"array","items":{"type":"number"},"description":"Where the exhaust comes out, in the model's voxels (default 0 0 0, the bottom center); e.g. 0 2 -10 for a car's tailpipe."}}},
 				    "ranged":{"type":"object","description":"Attack from range instead of melee (neutral or hostile).","properties":{
 				      "projectile":{"type":"string","description":"beam (instant ray), arrow, fireball, small_fireball, wind_charge, or an item id like minecraft:snowball or custom:<id> that flies as that item."},
@@ -2131,6 +2133,12 @@ public class GameTools implements McpServer.Tools {
 		JsonObject vehicle = obj(props, "vehicle");
 		if (vehicle != null) {
 			oneOf(vehicle, "controls", List.of("thrust", "drive"), "vehicle.controls");
+			if (vehicle.has("seats")) {
+				if (!vehicle.get("seats").isJsonArray() || vehicle.getAsJsonArray("seats").isEmpty() || vehicle.getAsJsonArray("seats").size() > 8) throw new ToolError("vehicle.seats is a list of 1 to 8 [x, y, z] positions");
+				for (JsonElement e : vehicle.getAsJsonArray("seats")) {
+					if (!e.isJsonArray() || e.getAsJsonArray().size() != 3) throw new ToolError("each seat is [x, y, z] in the model's voxels");
+				}
+			}
 			if (vehicle.has("exhaust")) {
 				String fx = vehicle.get("exhaust").getAsString().replaceFirst("^custom:", "");
 				vehicle.addProperty("exhaust", fx);
