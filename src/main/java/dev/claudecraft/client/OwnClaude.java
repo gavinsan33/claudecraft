@@ -138,6 +138,14 @@ public final class OwnClaude implements McpServer.Tools {
 			case "welcome" -> {
 				toolList = msg.getAsJsonArray("tools");
 				sessionKey = "remote:" + msg.get("world").getAsString();
+				// Saved before worlds had ids: move it from the world's name to its id, once.
+				if (msg.has("worldName") && !ClaudeProcess.loadSessions(sessionsFile).containsKey(sessionKey)) {
+					String oldKey = "remote:" + msg.get("worldName").getAsString(), old = ClaudeProcess.loadSessions(sessionsFile).get(oldKey);
+					if (old != null) {
+						ClaudeProcess.saveSession(sessionsFile, sessionKey, old);
+						ClaudeProcess.saveSession(sessionsFile, oldKey, null);
+					}
+				}
 				sessionId = ClaudeProcess.loadSessions(sessionsFile).get(sessionKey);
 				if (mcp == null) {
 					try {
