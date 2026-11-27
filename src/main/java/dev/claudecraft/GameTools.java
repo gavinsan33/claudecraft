@@ -304,6 +304,36 @@ public class GameTools implements McpServer.Tools {
 				},"required":["origin","palette","layers"]}""".formatted(POS_SCHEMA, DURATION_SCHEMA, DIM_SCHEMA),
 			this::placeBlueprint);
 
+		register("flood",
+			"Fill a basin with water or lava from a point, like pouring it in until it reaches a level: lakes, moats, pools, "
+				+ "lava lakes, a flooded crater or canyon. It spreads through connected open space (air, plants, snow) at and below "
+				+ "max_y, and places still source blocks, so it lies flat and doesn't flow off. If the space isn't closed (the water "
+				+ "would pour out over the rim or into caves), it reports that and places nothing; dig or wall the basin first. "
+				+ "Fills from the bottom up." + QUEUED,
+			"""
+				{"type":"object","properties":{
+				  "from":%s,
+				  "fluid":{"type":"string","enum":["water","lava"]},
+				  "max_y":{"type":"integer","description":"The water line; default from's y."},
+				  "max_blocks":{"type":"integer","description":"Give up past this many (default 20000)."},
+				  "duration_seconds":%s,
+				  "dimension":%s
+				},"required":["from","fluid"]}""".formatted(POS_SCHEMA, DURATION_SCHEMA, DIM_SCHEMA),
+			this::flood);
+
+		register("drain",
+			"Empty connected water or lava starting at a point: drain a lake, a flooded cave or a moat, clear a lava pool. "
+				+ "Also un-waterlogs blocks and removes kelp, seagrass and bubble columns in it. Drains from the top down." + QUEUED,
+			"""
+				{"type":"object","properties":{
+				  "from":%s,
+				  "fluid":{"type":"string","enum":["water","lava","any"],"description":"Default any."},
+				  "max_blocks":{"type":"integer","description":"Give up past this many (default 50000)."},
+				  "duration_seconds":%s,
+				  "dimension":%s
+				},"required":["from"]}""".formatted(POS_SCHEMA, DURATION_SCHEMA, DIM_SCHEMA),
+			this::drain);
+
 		register("fill_region",
 			"Fill the box between two corners (inclusive) with one block state. Modes: solid (whole box), hollow (shell of "
 				+ "the block with air inside), outline (shell only, inside untouched), walls (four vertical sides only). "
@@ -1365,6 +1395,88 @@ public class GameTools implements McpServer.Tools {
 		}
 		if (!unknown.isEmpty()) throw new ToolError("Characters not in palette: " + String.join(" ", unknown) + " (nothing was placed)");
 		return queueBuild(level, changes, args);
+	}
+
+	private static final net.minecraft.core.Direction[] SIX = net.minecraft.core.Direction.values();
+
+	private String flood(JsonObject args) throws ToolError {
+		ServerLevel level = level(args);
+		BlockPos start = pos(args, "from");
+		boolean lava = args.get("fluid").getAsString().equals("lava");
+		int maxY = args.has("max_y") ? args.get("max_y").getAsInt() : start.getY();
+		int max = Math.min(cfg.maxBlocksPerCall, Math.max(1, optInt(args, "max_blocks", 20000)));
+		BlockState fluid = (lava ? Blocks.LAVA : Blocks.WATER).defaultBlockState();
+		var kind = lava ? net.minecraft.world.level.material.Fluids.LAVA : net.minecraft.world.level.material.Fluids.WATER;
+		// Open space: air, plants, snow, and the same fluid that's still flowing (it becomes still).
+		Predicate<BlockState> open = st -> st.isAir() || st.canBeReplaced() && st.getFluidState().isEmpty()
+			|| st.getFluidState().getType().isSame(kind) && !st.getFluidState().isSource() && st.getBlock() instanceof net.minecraft.world.level.block.LiquidBlock;
+		if (start.getY() > maxY) throw new ToolError("from is above max_y");
+		if (!open.test(level.getBlockState(start))) throw new ToolError("from must be open space (air or plants) inside the basin, got " + blockName(level.getBlockState(start), true));
+		java.util.ArrayDeque<BlockPos> todo = new java.util.ArrayDeque<>(List.of(start));
+		java.util.Set<BlockPos> seen = new java.util.HashSet<>(List.of(start));
+		List<BlockPos> fill = new ArrayList<>();
+		while (!todo.isEmpty()) {
+			BlockPos p = todo.poll();
+			fill.add(p);
+			if (fill.size() > max) {
+				throw new ToolError("The " + (lava ? "lava" : "water") + " would spread past " + max + " blocks below y " + maxY
+					+ ": the basin isn't closed (it leaks over a rim, out a side or into caves), or it's bigger than that. Nothing was placed. "
+					+ "Wall it in or lower max_y.");
+			}
+			for (var d : SIX) {
+				BlockPos q = p.relative(d);
+				if (q.getY() > maxY || q.getY() < level.getMinY() || !seen.add(q)) continue;
+				if (open.test(level.getBlockState(q))) todo.add(q);
+			}
+		}
+		fill.sort(java.util.Comparator.comparingInt(BlockPos::getY)); // rising water
+		LinkedHashMap<BlockPos, BlockState> changes = new LinkedHashMap<>();
+		for (BlockPos p : fill) changes.put(p, fluid);
+		return queueBuild(level, changes, args).replace("Queued build", "Flooding (" + fill.size() + " blocks up to y " + maxY + ") as build");
+	}
+
+	private String drain(JsonObject args) throws ToolError {
+		ServerLevel level = level(args);
+		BlockPos start = pos(args, "from");
+		String which = args.has("fluid") ? args.get("fluid").getAsString() : "any";
+		int max = Math.min(cfg.maxBlocksPerCall, Math.max(1, optInt(args, "max_blocks", 50000)));
+		Predicate<BlockState> wet = st -> {
+			var f = st.getFluidState();
+			if (f.isEmpty()) return false;
+			boolean water = f.is(net.minecraft.tags.FluidTags.WATER);
+			return which.equals("any") || which.equals("water") == water;
+		};
+		BlockPos first = start;
+		if (!wet.test(level.getBlockState(first))) {
+			// Close enough: the nearest matching fluid within a couple of blocks.
+			first = null;
+			for (BlockPos p : BlockPos.withinManhattan(start, 2)) if (wet.test(level.getBlockState(p))) { first = p.immutable(); break; }
+			if (first == null) throw new ToolError("No " + (which.equals("any") ? "water or lava" : which) + " at or next to from");
+		}
+		java.util.ArrayDeque<BlockPos> todo = new java.util.ArrayDeque<>(List.of(first));
+		java.util.Set<BlockPos> seen = new java.util.HashSet<>(List.of(first));
+		List<BlockPos> found = new ArrayList<>();
+		while (!todo.isEmpty()) {
+			BlockPos p = todo.poll();
+			found.add(p);
+			if (found.size() > max) throw new ToolError("There's more than " + max + " blocks of it connected (an ocean or an underground sea?). Nothing was changed; raise max_blocks or drain a walled-off part.");
+			for (var d : SIX) {
+				BlockPos q = p.relative(d);
+				if (q.getY() < level.getMinY() || q.getY() >= level.getMaxY() || !seen.add(q)) continue;
+				if (wet.test(level.getBlockState(q))) todo.add(q);
+			}
+		}
+		found.sort(java.util.Comparator.comparingInt((BlockPos p) -> -p.getY())); // the level falls
+		LinkedHashMap<BlockPos, BlockState> changes = new LinkedHashMap<>();
+		for (BlockPos p : found) {
+			BlockState st = level.getBlockState(p);
+			if (st.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED)) {
+				changes.put(p, st.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED, false));
+			} else {
+				changes.put(p, Blocks.AIR.defaultBlockState()); // water, lava, kelp, seagrass, bubble columns
+			}
+		}
+		return queueBuild(level, changes, args).replace("Queued build", "Draining (" + found.size() + " blocks) as build");
 	}
 
 	private String fillRegion(JsonObject args) throws ToolError {
