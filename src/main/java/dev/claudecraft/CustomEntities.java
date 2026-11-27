@@ -334,6 +334,19 @@ public final class CustomEntities {
 			}
 			roll += (r - roll) * 0.25f;
 			lean += (l - lean) * 0.25f;
+			// Wheels roll as far as it moved forward (backwards in reverse); front wheels turn with the steering;
+			// propellers and rotors spin with speed, and idle while someone's aboard.
+			rolledO = rolled;
+			steerO = steer;
+			spinO = spin;
+			double yaw = getYRot() * Mth.DEG_TO_RAD, dx = getX() - xo, dz = getZ() - zo;
+			double forward = -dx * Math.sin(yaw) + dz * Math.cos(yaw);
+			rolled += (float) forward;
+			float turning = Float.isNaN(lastYaw) ? 0 : Mth.wrapDegrees(getYRot() - lastYaw);
+			lastYaw = getYRot();
+			steer += (Mth.clamp(-turning * 6, -30, 30) - steer) * 0.3f;
+			double speed = Math.sqrt(dx * dx + (getY() - yo) * (getY() - yo) + dz * dz);
+			spin += (float) (speed * 3 + (isVehicle() ? 0.5 : 0));
 		}
 
 		@Override

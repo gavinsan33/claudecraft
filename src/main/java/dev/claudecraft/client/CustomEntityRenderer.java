@@ -30,6 +30,8 @@ public class CustomEntityRenderer extends EntityRenderer<CustomEntities.CustomEn
 		boolean airborne;
 		/** A vehicle's lean in degrees, and the height (blocks) it leans around. */
 		float roll, lean, leanAt;
+		/** Wheels, steering and propellers: blocks rolled, steering degrees, spin radians. */
+		float rolled, steer, spin;
 		boolean sitting;
 		/** Size scale: babies are half size. */
 		float scale = 1;
@@ -60,6 +62,9 @@ public class CustomEntityRenderer extends EntityRenderer<CustomEntities.CustomEn
 		s.roll = Mth.lerp(pt, e.rollO, e.roll);
 		s.lean = Mth.lerp(pt, e.leanO, e.lean);
 		s.leanAt = e.getBbHeight() / 2;
+		s.rolled = Mth.lerp(pt, e.rolledO, e.rolled);
+		s.steer = Mth.lerp(pt, e.steerO, e.steer);
+		s.spin = Mth.lerp(pt, e.spinO, e.spin);
 		s.sitting = e.isInSittingPose();
 		s.scale = e.getScale() * e.getAgeScale();
 	}
@@ -104,7 +109,7 @@ public class CustomEntityRenderer extends EntityRenderer<CustomEntities.CustomEn
 				EntityModel.Part p = model.parts.get(i);
 				pose.pushPose();
 				pose.translate(p.pivot()[0] / model.scale, p.pivot()[1] / model.scale, p.pivot()[2] / model.scale);
-				animate(pose, p, s);
+				animate(pose, p, s, model.scale);
 				ClaudeCraftClient.submitMesh(pose, collector, meshes.get(i), s.lightCoords, overlay);
 				pose.popPose();
 			}
@@ -113,8 +118,18 @@ public class CustomEntityRenderer extends EntityRenderer<CustomEntities.CustomEn
 		super.submit(s, pose, collector, camera); // name tag
 	}
 
-	private static void animate(PoseStack pose, EntityModel.Part p, State s) {
-		animate(pose, p.role(), p.phase(), p.pivot()[0], s, s.airborne);
+	private static void animate(PoseStack pose, EntityModel.Part p, State s, float scale) {
+		switch (p.role()) {
+			case "wheel", "front_wheel" -> {
+				if (p.role().equals("front_wheel")) pose.rotateDegrees(Axis.YP, s.steer);
+				// Rolls without slipping: the distance travelled over its radius (half its height), in blocks.
+				float radius = Math.max(0.5f, p.voxels().sy / 2f) / scale;
+				pose.rotate(Axis.XP, s.rolled / radius);
+			}
+			case "propeller" -> pose.rotate(Axis.ZP, s.spin);
+			case "rotor" -> pose.rotate(Axis.YP, s.spin);
+			default -> animate(pose, p.role(), p.phase(), p.pivot()[0], s, s.airborne);
+		}
 	}
 
 	/** Turn a part by its role at its pivot: heads look, legs and arms swing, wings flap, tails sway. Morphs use it too. */

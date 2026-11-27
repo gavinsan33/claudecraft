@@ -655,7 +655,7 @@ public class GameTools implements McpServer.Tools {
 			"Create a custom creature, or update one by reusing its id (creatures already spawned change too). Build it from "
 				+ "voxel parts that are animated by role: body (still), head (turns to look around), leg (swings while walking; "
 				+ "legs with the same phase move together, so give four legs diagonal pairs), arm (swings opposite the legs), "
-				+ "wing (flaps), tail (sways), none (still). Coordinates are voxels in the creature's own space: x = 0, z = 0 "
+				+ "wing (flaps), tail (sways), and for vehicles wheel (rolls as far as it travels, backwards in reverse), front_wheel (rolls and turns with the steering), propeller (spins about the way it faces) and rotor (spins flat, like a helicopter's), which turn about their center by default; none (still). Coordinates are voxels in the creature's own space: x = 0, z = 0 "
 				+ "is its center, y = 0 its feet, +z is the way it faces (its front) and +x its left side. Each part has "
 				+ "layers (place_blueprint format: layers bottom to top, rows along +z, characters along +x), origin (where "
 				+ "its layers start: the minimum corner) and pivot (the point it rotates around: a hip, shoulder, neck or wing "
@@ -673,7 +673,7 @@ public class GameTools implements McpServer.Tools {
 				  "palette":{"type":"object","additionalProperties":{"type":"string"}},
 				  "parts":{"type":"array","items":{"type":"object","properties":{
 				    "name":{"type":"string"},
-				    "role":{"type":"string","enum":["body","head","leg","arm","wing","tail","none"]},
+				    "role":{"type":"string","enum":["body","head","leg","arm","wing","tail","wheel","front_wheel","propeller","rotor","none"]},
 				    "origin":{"type":"array","items":{"type":"integer"}},
 				    "pivot":{"type":"array","items":{"type":"number"}},
 				    "phase":{"type":"integer","description":"legs and arms: 0 or 1."},

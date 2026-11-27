@@ -19,7 +19,9 @@ import java.util.Set;
  * point it rotates around (a hip, a neck, a wing root).
  */
 public final class EntityModel {
-	public static final Set<String> ROLES = Set.of("body", "head", "leg", "arm", "wing", "tail", "none");
+	public static final Set<String> ROLES = Set.of("body", "head", "leg", "arm", "wing", "tail", "wheel", "front_wheel", "propeller", "rotor", "none");
+	/** Roles that spin about their own center (an axle, a hub), so that's their default pivot. */
+	public static final Set<String> SPINNING = Set.of("wheel", "front_wheel", "propeller", "rotor");
 	public static final int MAX_PARTS = 24, MAX_SPAN = 64;
 
 	/** @param phase legs and arms with the same phase swing together */
@@ -75,6 +77,7 @@ public final class EntityModel {
 			}
 			int[] origin = ints(p, "origin", name);
 			float[] pivot = p.has("pivot") ? floats(p.getAsJsonArray("pivot"), name)
+				: SPINNING.contains(role) ? new float[]{origin[0] + v.sx / 2f, origin[1] + v.sy / 2f, origin[2] + v.sz / 2f} // its center
 				: new float[]{origin[0] + v.sx / 2f, origin[1] + v.sy, origin[2] + v.sz / 2f}; // default: top center
 			boolean limb = role.equals("leg") || role.equals("arm");
 			int phase = p.has("phase") ? p.get("phase").getAsInt() & 1 : limb ? limbs & 1 : 0;
