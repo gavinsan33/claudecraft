@@ -99,6 +99,9 @@ public class ClaudeCraft implements ModInitializer {
 							p != null ? describeLocation(p) : null, true));
 						return 1;
 					})))
+				.then(Commands.literal("explode").requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
+					// claude explode <power> [break|debris|keep] [shatter] [fire] [harmless] [knockback=<n>]: see Explosions.
+					.then(Commands.argument("spec", StringArgumentType.greedyString()).executes(ClaudeCraft::explode)))
 				.then(Commands.literal("shape").requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
 					// claude shape <block> <forward> <side> <down> <up> <expression>: see WorldShapes.
 					.then(Commands.argument("spec", StringArgumentType.greedyString()).executes(ClaudeCraft::shape)))
@@ -294,6 +297,35 @@ public class ClaudeCraft implements ModInitializer {
 		}
 		for (ServerPlayer p : players) Morphs.set(p, id);
 		return players.size();
+	}
+
+	private static int explode(com.mojang.brigadier.context.CommandContext<net.minecraft.commands.CommandSourceStack> ctx) {
+		var src = ctx.getSource();
+		String[] t = StringArgumentType.getString(ctx, "spec").trim().toLowerCase(java.util.Locale.ROOT).split("\\s+");
+		try {
+			float power = Float.parseFloat(t[0]);
+			if (!(power > 0 && power <= Explosions.MAX_POWER)) throw new IllegalArgumentException("Power is above 0 and at most " + (int) Explosions.MAX_POWER + " (TNT is 4)");
+			String mode = "break";
+			boolean fire = false, harmless = false, shatter = false;
+			float knockback = 1;
+			for (int i = 1; i < t.length; i++) {
+				if (Explosions.MODES.contains(t[i])) mode = t[i];
+				else if (t[i].equals("fire")) fire = true;
+				else if (t[i].equals("harmless")) harmless = true;
+				else if (t[i].equals("shatter")) shatter = true;
+				else if (t[i].startsWith("knockback=")) knockback = Math.clamp(Float.parseFloat(t[i].substring(10)), 0, 10);
+				else throw new IllegalArgumentException("Unknown option " + t[i] + "; use break, debris, keep, shatter, fire, harmless or knockback=<n>");
+			}
+			int debris = Explosions.explode(src.getLevel(), src.getPosition(), power, mode, fire, harmless, knockback, shatter, src.getEntity());
+			src.sendSuccess(() -> net.minecraft.network.chat.Component.literal("Boom" + (debris > 0 ? " (" + debris + " pieces of debris)" : "")), false);
+			return 1;
+		} catch (NumberFormatException e) {
+			src.sendFailure(net.minecraft.network.chat.Component.literal("Usage: claude explode <power> [break|debris|keep] [shatter] [fire] [harmless] [knockback=<n>]"));
+			return 0;
+		} catch (IllegalArgumentException e) {
+			src.sendFailure(net.minecraft.network.chat.Component.literal(e.getMessage()));
+			return 0;
+		}
 	}
 
 	private static int shape(com.mojang.brigadier.context.CommandContext<net.minecraft.commands.CommandSourceStack> ctx) {
