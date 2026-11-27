@@ -57,6 +57,8 @@ public class ClaudeBridge {
 	private final Path sessionsFile;
 	private final Path configFile;
 	private final String worldName;
+	/** A random id this world keeps forever, for friends' own Claude to tell worlds apart. */
+	private final String worldId;
 
 	/** The host's sessions, numbered #1, #2… Guarded by {@link #lock}. */
 	private final List<Slot> local = new ArrayList<>();
@@ -87,9 +89,12 @@ public class ClaudeBridge {
 		this.mcp = mcp;
 		this.workDir = configDir.resolve("workspace");
 		this.promptFile = configDir.resolve("system-prompt.md");
-		this.sessionsFile = configDir.resolve("sessions.json");
+		// Conversations are kept in the world's own folder, so two worlds with the same name (every world starts as
+		// "New World") never share one, renaming keeps it, and it travels with a copied world.
+		this.sessionsFile = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).resolve("claudecraft").resolve("sessions.json");
 		this.configFile = configDir.resolve("config.json");
 		this.worldName = server.getWorldData().getLevelName();
+		this.worldId = worldId(configDir.resolve("sessions.json"));
 		try {
 			Files.createDirectories(workDir);
 		} catch (IOException e) {
@@ -97,6 +102,29 @@ public class ClaudeBridge {
 		}
 		resizeLocal(cfg.maxConcurrentSessions);
 	}
+
+	/**
+	 * This world's id, made the first time. Also moves this world's conversations out of the old shared
+	 * config/claudecraft/sessions.json, which kept them by world name, and removes them there, so another world with
+	 * the same name can't pick them up too.
+	 */
+	private String worldId(Path oldShared) {
+		Map<String, String> mine = ClaudeProcess.loadSessions(sessionsFile);
+		String id = mine.get(WORLD_ID);
+		if (id != null) return id;
+		id = UUID.randomUUID().toString();
+		ClaudeProcess.saveSession(sessionsFile, WORLD_ID, id);
+		Map<String, String> old = ClaudeProcess.loadSessions(oldShared);
+		for (int n = 1; n <= MAX_SESSIONS; n++) {
+			String oldKey = n == 1 ? worldName : worldName + "#" + n, session = old.get(oldKey);
+			if (session == null) continue;
+			ClaudeProcess.saveSession(sessionsFile, String.valueOf(n), session);
+			ClaudeProcess.saveSession(oldShared, oldKey, null);
+		}
+		return id;
+	}
+
+	private static final String WORLD_ID = "world_id";
 
 	/** Add or retire host sessions to match a new limit. Busy sessions being removed finish their queue first. */
 	private void resizeLocal(int n) {
@@ -160,7 +188,7 @@ public class ClaudeBridge {
 			this.index = index;
 			this.owner = owner;
 			this.ownerName = ownerName;
-			this.key = index == 0 ? worldName : worldName + "#" + (index + 1);
+			this.key = String.valueOf(index + 1);
 			this.worker = Executors.newSingleThreadExecutor(r -> {
 				Thread t = new Thread(r, "ClaudeCraft-Bridge-" + (owner == null ? String.valueOf(index + 1) : ownerName));
 				t.setDaemon(true);
@@ -654,7 +682,8 @@ public class ClaudeBridge {
 		}
 		if (old != null) retire(old);
 		JsonObject out = RemoteLink.message("welcome");
-		out.addProperty("world", worldName);
+		out.addProperty("world", worldId);
+		out.addProperty("worldName", worldName); // older saved conversations are under the name
 		out.add("tools", tools.listTools());
 		ServerPlayNetworking.send(player, new RemoteLink.Payload(out));
 		ClaudeCraft.LOGGER.info("{} is using their own Claude", name);
